@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard — GT Scout{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-header">
+    <div class="page-title">Dashboard</div>
+    <div class="page-subtitle">GT Leagues · Atualizado às {{ now.strftime('%H:%M:%S') }}</div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-box green">
+      <div class="stat-value">{{ summary.total }}</div>
+      <div class="stat-label">Total de Partidas</div>
+    </div>
+    <div class="stat-box blue">
+      <div class="stat-value">{{ summary.today }}</div>
+      <div class="stat-label">Partidas Hoje</div>
+    </div>
+    <div class="stat-box yellow">
+      <div class="stat-value">{{ summary.seasons|length }}</div>
+      <div class="stat-label">Temporadas</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">⚽ Últimas Partidas</span>
+      <a href="/matches" class="btn btn-ghost" style="font-size:11px;">Ver todas →</a>
+    </div>
+    <div class="card-body" style="padding:12px;">
+      {% for m in recent %}
+      <div class="match-card" style="margin-bottom:8px;">
+        <div class="match-player">
+          {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" class="team-crest" onerror="this.style.display='none'">{% endif %}
+          <div class="player-name">{{ m.home_nickname }}</div>
+          <div class="player-team">{{ m.home_team }}</div>
+        </div>
+        <div class="match-score">
+          <span class="score-num" style="color:{% if m.home_score > m.away_score %}var(--accent){% elif m.home_score < m.away_score %}var(--accent3){% else %}var(--text){% endif %}">{{ m.home_score }}</span>
+          <span class="score-sep">×</span>
+          <span class="score-num" style="color:{% if m.away_score > m.home_score %}var(--accent){% elif m.away_score < m.home_score %}var(--accent3){% else %}var(--text){% endif %}">{{ m.away_score }}</span>
+        </div>
+        <div class="match-player away">
+          <div class="player-name">{{ m.away_nickname }}</div>
+          <div class="player-team">{{ m.away_team }}</div>
+          {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" class="team-crest" onerror="this.style.display='none'">{% endif %}
+        </div>
+        <div style="margin-left:auto;text-align:right;min-width:120px;">
+          <div style="font-size:11px;color:var(--muted);">{{ m.season_name }}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px;">{{ m.kickoff[:10] if m.kickoff else '' }}</div>
+        </div>
+      </div>
+      {% else %}
+      <p style="color:var(--muted);text-align:center;padding:40px;">Nenhuma partida coletada ainda. Aguardando próxima varredura...</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

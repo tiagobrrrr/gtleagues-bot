@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}GT Scout{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --surface: #111418;
+      --surface2: #181c22;
+      --border: #1e2530;
+      --accent: #00e5a0;
+      --accent2: #0099ff;
+      --accent3: #ff4d6d;
+      --text: #e8edf5;
+      --muted: #5a6478;
+      --live: #ff4d6d;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Barlow', sans-serif;
+           font-size: 14px; min-height: 100vh; }
+
+    /* NAV */
+    nav { background: var(--surface); border-bottom: 1px solid var(--border);
+          display: flex; align-items: center; gap: 0; position: sticky; top: 0; z-index: 100; }
+    .nav-brand { font-family: 'Bebas Neue'; font-size: 22px; letter-spacing: 3px;
+                 color: var(--accent); padding: 0 28px; border-right: 1px solid var(--border);
+                 height: 52px; display: flex; align-items: center; white-space: nowrap; }
+    .nav-brand span { color: var(--muted); font-size: 13px; letter-spacing: 1px; margin-left: 8px; font-family: 'Barlow'; }
+    .nav-links { display: flex; height: 52px; }
+    .nav-links a { color: var(--muted); text-decoration: none; padding: 0 18px;
+                   display: flex; align-items: center; font-size: 12px; font-weight: 600;
+                   letter-spacing: 1px; text-transform: uppercase; border-bottom: 2px solid transparent;
+                   transition: all .2s; }
+    .nav-links a:hover, .nav-links a.active { color: var(--text); border-bottom-color: var(--accent); }
+    .nav-right { margin-left: auto; padding: 0 20px; display: flex; align-items: center; gap: 10px; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+             animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
+    .nav-timer { font-family: 'Barlow Condensed'; font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+
+    /* LAYOUT */
+    .container { max-width: 1400px; margin: 0 auto; padding: 32px 24px; }
+    .page-header { margin-bottom: 32px; }
+    .page-title { font-family: 'Bebas Neue'; font-size: 36px; letter-spacing: 4px;
+                  color: var(--text); line-height: 1; }
+    .page-subtitle { color: var(--muted); font-size: 12px; letter-spacing: 2px;
+                     text-transform: uppercase; margin-top: 4px; }
+
+    /* CARDS */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+    .card-header { padding: 16px 20px; border-bottom: 1px solid var(--border);
+                   display: flex; align-items: center; justify-content: space-between; }
+    .card-title { font-family: 'Barlow Condensed'; font-size: 13px; font-weight: 700;
+                  letter-spacing: 2px; text-transform: uppercase; color: var(--accent); }
+    .card-body { padding: 20px; }
+
+    /* STAT BOXES */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 32px; }
+    .stat-box { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+                padding: 20px 16px; position: relative; overflow: hidden; }
+    .stat-box::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+    .stat-box.green::before { background: var(--accent); }
+    .stat-box.blue::before { background: var(--accent2); }
+    .stat-box.red::before { background: var(--accent3); }
+    .stat-box.yellow::before { background: #f5c842; }
+    .stat-value { font-family: 'Bebas Neue'; font-size: 40px; line-height: 1;
+                  color: var(--text); letter-spacing: 2px; }
+    .stat-label { font-size: 11px; font-weight: 600; letter-spacing: 2px;
+                  text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+
+    /* TABLE */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th { font-family: 'Barlow Condensed'; font-size: 11px; font-weight: 700;
+         letter-spacing: 2px; text-transform: uppercase; color: var(--muted);
+         padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    td { padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+             border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+    .badge-green { background: rgba(0,229,160,.12); color: var(--accent); }
+    .badge-blue { background: rgba(0,153,255,.12); color: var(--accent2); }
+    .badge-red { background: rgba(255,77,109,.12); color: var(--accent3); }
+    .badge-gray { background: rgba(90,100,120,.15); color: var(--muted); }
+
+    /* MATCH CARD */
+    .match-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+                  padding: 14px 18px; display: flex; align-items: center; gap: 12px; }
+    .match-player { flex: 1; }
+    .match-player.away { text-align: right; }
+    .player-name { font-family: 'Barlow Condensed'; font-size: 16px; font-weight: 700;
+                   letter-spacing: 1px; color: var(--text); }
+    .player-team { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .match-score { display: flex; align-items: center; gap: 10px; padding: 0 16px; }
+    .score-num { font-family: 'Bebas Neue'; font-size: 32px; color: var(--text); letter-spacing: 2px; }
+    .score-sep { color: var(--muted); font-size: 18px; }
+    .team-crest { width: 28px; height: 28px; object-fit: contain; }
+
+    /* BUTTONS */
+    .btn { padding: 8px 18px; border-radius: 4px; font-size: 12px; font-weight: 700;
+           letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+           border: none; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+           transition: all .2s; }
+    .btn-primary { background: var(--accent); color: #000; }
+    .btn-primary:hover { background: #00ffb3; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: var(--muted); }
+
+    /* PAGINATION */
+    .pagination { display: flex; gap: 6px; align-items: center; margin-top: 20px; justify-content: center; }
+    .pagination a, .pagination span { padding: 6px 12px; border: 1px solid var(--border);
+      border-radius: 4px; font-size: 12px; color: var(--muted); text-decoration: none; }
+    .pagination a:hover { color: var(--text); border-color: var(--accent); }
+    .pagination .current { background: var(--accent); color: #000; border-color: var(--accent); }
+
+    /* SELECT */
+    select { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+             padding: 7px 12px; border-radius: 4px; font-size: 12px; font-family: 'Barlow'; cursor: pointer; }
+    select:focus { outline: none; border-color: var(--accent); }
+
+    /* RANK */
+    .rank { font-family: 'Bebas Neue'; font-size: 18px; color: var(--muted); width: 30px; }
+    .rank.top { color: var(--accent); }
+
+    /* GRID 2 COL */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media(max-width:768px){ .grid-2{grid-template-columns:1fr;} .nav-links a{padding:0 10px;font-size:10px;} }
+
+    /* AVG BAR */
+    .avg-bar-wrap { display: flex; align-items: center; gap: 10px; }
+    .avg-bar { height: 6px; border-radius: 3px; background: var(--accent); min-width: 2px; transition: width .4s; }
+    .avg-bar.red { background: var(--accent3); }
+    .avg-val { font-family: 'Barlow Condensed'; font-size: 14px; font-weight: 700; color: var(--accent); min-width: 36px; }
+    .avg-val.red { color: var(--accent3); }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+<nav>
+  <div class="nav-brand">GT Scout <span>BOT</span></div>
+  <div class="nav-links">
+    <a href="/" {% if request.path=='/' %}class="active"{% endif %}>Dashboard</a>
+    <a href="/matches" {% if request.path=='/matches' %}class="active"{% endif %}>Partidas</a>
+    <a href="/statistics" {% if request.path=='/statistics' %}class="active"{% endif %}>Estatísticas</a>
+    <a href="/charts" {% if request.path=='/charts' %}class="active"{% endif %}>Gráficos</a>
+    <a href="/head-to-head" {% if request.path=='/head-to-head' %}class="active"{% endif %}>Confrontos</a>
+    <a href="/players" {% if request.path=='/players' %}class="active"{% endif %}>Players</a>
+    <a href="/reports" {% if request.path=='/reports' %}class="active"{% endif %}>Relatórios</a>
+  </div>
+  <div class="nav-right">
+    <div class="pulse"></div>
+    <span class="nav-timer" id="nav-clock"></span>
+  </div>
+</nav>
+{% block content %}{% endblock %}
+<script>
+  function updateClock(){ document.getElementById('nav-clock').textContent = new Date().toLocaleTimeString('pt-BR'); }
+  updateClock(); setInterval(updateClock, 1000);
+  // auto-refresh a cada 5 min
+  setTimeout(()=>location.reload(), 5*60*1000);
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

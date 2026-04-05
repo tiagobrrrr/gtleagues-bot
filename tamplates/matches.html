@@ -1,0 +1,89 @@
+{% extends "layout.html" %}
+{% block title %}Partidas — GT Scout{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-header" style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <div class="page-title">Partidas</div>
+      <div class="page-subtitle">Resultados coletados da GT Leagues</div>
+    </div>
+    <form method="get" style="display:flex;gap:8px;align-items:center;">
+      <select name="season" onchange="this.form.submit()">
+        <option value="">Todas as temporadas</option>
+        {% for s in seasons %}<option value="{{ s }}" {% if s==selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Data</th>
+            <th>Casa</th>
+            <th style="text-align:center;">Placar</th>
+            <th>Visitante</th>
+            <th>Temporada</th>
+            <th>Canal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in pagination.items %}
+          <tr>
+            <td style="color:var(--muted);font-size:11px;">W{{ m.week }}</td>
+            <td style="color:var(--muted);font-size:12px;">{{ m.kickoff[:16].replace('T',' ') if m.kickoff else '—' }}</td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px;">
+                {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
+                <div>
+                  <div style="font-weight:600;">{{ m.home_nickname }}</div>
+                  <div style="font-size:11px;color:var(--muted);">{{ m.home_team }}</div>
+                </div>
+              </div>
+            </td>
+            <td style="text-align:center;">
+              <span style="font-family:'Bebas Neue';font-size:20px;
+                color:{% if m.home_score > m.away_score %}var(--accent){% elif m.home_score < m.away_score %}var(--accent3){% else %}var(--text){% endif %}">
+                {{ m.home_score }}
+              </span>
+              <span style="color:var(--muted);margin:0 4px;">×</span>
+              <span style="font-family:'Bebas Neue';font-size:20px;
+                color:{% if m.away_score > m.home_score %}var(--accent){% elif m.away_score < m.home_score %}var(--accent3){% else %}var(--text){% endif %}">
+                {{ m.away_score }}
+              </span>
+            </td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+                <div style="text-align:right;">
+                  <div style="font-weight:600;">{{ m.away_nickname }}</div>
+                  <div style="font-size:11px;color:var(--muted);">{{ m.away_team }}</div>
+                </div>
+                {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
+              </div>
+            </td>
+            <td style="font-size:11px;color:var(--muted);">{{ m.season_name }}</td>
+            <td><span class="badge badge-gray">{{ m.channel or '—' }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:40px;">Nenhuma partida encontrada.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if pagination.pages > 1 %}
+    <div style="padding:16px;">
+      <div class="pagination">
+        {% if pagination.has_prev %}<a href="?page={{ pagination.prev_num }}&season={{ selected }}">‹</a>{% endif %}
+        {% for p in pagination.iter_pages() %}
+          {% if p %}<a href="?page={{ p }}&season={{ selected }}" {% if p==pagination.page %}class="current"{% endif %}>{{ p }}</a>
+          {% else %}<span>…</span>{% endif %}
+        {% endfor %}
+        {% if pagination.has_next %}<a href="?page={{ pagination.next_num }}&season={{ selected }}">›</a>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

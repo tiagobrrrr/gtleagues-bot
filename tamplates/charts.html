@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+{% block title %}Gráficos — GT Scout{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-header">
+    <div class="page-title">Gráficos</div>
+    <div class="page-subtitle">Visualizações de desempenho</div>
+  </div>
+  <div class="grid-2" style="margin-bottom:24px;">
+    <div class="card">
+      <div class="card-header"><span class="card-title">⚽ Média de Gols Marcados / Partida</span></div>
+      <div class="card-body"><canvas id="chartScored" height="260"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">🛡️ Média de Gols Sofridos / Partida</span></div>
+      <div class="card-body"><canvas id="chartConceded" height="260"></canvas></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">📊 Gols Marcados vs Sofridos</span></div>
+    <div class="card-body"><canvas id="chartBoth" height="160"></canvas></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const stats = {{ stats | tojson }};
+const top = stats.slice(0,15);
+const labels = top.map(s=>s.nickname);
+const scored = top.map(s=>s.avg_goals_scored);
+const conceded = top.map(s=>s.avg_goals_conceded);
+const C = { green:'#00e5a0', red:'#ff4d6d', blue:'#0099ff', bg:'#181c22', border:'#1e2530', text:'#5a6478' };
+Chart.defaults.color = C.text;
+Chart.defaults.borderColor = C.border;
+function barChart(id, labels, data, color, label){
+  new Chart(document.getElementById(id),{
+    type:'bar',
+    data:{ labels, datasets:[{label, data, backgroundColor: color+'33', borderColor: color, borderWidth:2, borderRadius:4}]},
+    options:{ plugins:{legend:{display:false}}, scales:{ x:{ticks:{font:{family:'Barlow Condensed',size:11}}}, y:{beginAtZero:true} } }
+  });
+}
+barChart('chartScored', labels, scored, C.green, 'Média GF/Partida');
+barChart('chartConceded', labels, conceded, C.red, 'Média GC/Partida');
+new Chart(document.getElementById('chartBoth'),{
+  type:'bar',
+  data:{ labels, datasets:[
+    {label:'Méd. Marcados', data:scored, backgroundColor:C.green+'44', borderColor:C.green, borderWidth:2, borderRadius:4},
+    {label:'Méd. Sofridos', data:conceded, backgroundColor:C.red+'44', borderColor:C.red, borderWidth:2, borderRadius:4},
+  ]},
+  options:{ plugins:{legend:{labels:{font:{family:'Barlow'}}}},
+    scales:{ x:{ticks:{font:{family:'Barlow Condensed',size:11}}}, y:{beginAtZero:true} } }
+});
+</script>
+{% endblock %}
