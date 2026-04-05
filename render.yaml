@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: gtscout-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GT_API_BASE_URL
+        value: https://www.gtleagues.com/api
+      - key: GT_SEASON_IDS
+        value: "19211"
+      - key: SCRAPER_INTERVAL_MINUTES
+        value: "5"
+      - key: FLASK_PORT
+        value: "5000"
+      - key: SECRET_KEY
+        generateValue: true
