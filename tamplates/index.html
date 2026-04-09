@@ -3,8 +3,11 @@
 {% block content %}
 <div class="container">
   <div class="page-header">
-    <div class="page-title">Dashboard</div>
-    <div class="page-subtitle">GT Leagues · Atualizado às {{ now.strftime('%H:%M:%S') }}</div>
+    <div class="page-header-left">
+      <div class="page-title">Dashboard</div>
+      <div class="page-subtitle">GT Leagues · Atualizado às {{ now.strftime('%H:%M:%S') }}</div>
+    </div>
+    <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
   </div>
 
   <div class="stats-grid">
@@ -22,36 +25,61 @@
     </div>
   </div>
 
+  <!-- LEGENDA -->
+  <div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+      <div style="width:12px;height:12px;border-radius:2px;background:#1DB954;opacity:.8;"></div>
+      <span style="color:var(--muted);">Vencedor</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+      <div style="width:12px;height:12px;border-radius:2px;background:#E53935;opacity:.8;"></div>
+      <span style="color:var(--muted);">Perdedor</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+      <div style="width:12px;height:12px;border-radius:2px;background:#FDD835;opacity:.8;"></div>
+      <span style="color:var(--muted);">Empate</span>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-header">
       <span class="card-title">⚽ Últimas Partidas</span>
       <a href="/matches" class="btn btn-ghost" style="font-size:11px;">Ver todas →</a>
     </div>
-    <div class="card-body" style="padding:12px;">
+    <div class="card-body" style="padding:10px;">
       {% for m in recent %}
-      <div class="match-card" style="margin-bottom:8px;">
-        <div class="match-player">
-          {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" class="team-crest" onerror="this.style.display='none'">{% endif %}
-          <div class="player-name">{{ m.home_nickname }}</div>
+      {% set hs = m.home_score %}
+      {% set as_ = m.away_score %}
+      {% if hs > as_ %}
+        {% set h_cls = 'cell-win' %}{% set a_cls = 'cell-lose' %}
+      {% elif hs < as_ %}
+        {% set h_cls = 'cell-lose' %}{% set a_cls = 'cell-win' %}
+      {% else %}
+        {% set h_cls = 'cell-draw' %}{% set a_cls = 'cell-draw' %}
+      {% endif %}
+      <div class="match-card" style="margin-bottom:7px;">
+        <div style="flex:1;">
+          {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" class="team-crest" onerror="this.style.display='none'" style="margin-bottom:2px;">{% endif %}
+          <div class="player-name {{ h_cls }}" style="border-radius:3px;padding:1px 5px;display:inline-block;">{{ m.home_nickname }}</div>
           <div class="player-team">{{ m.home_team }}</div>
         </div>
-        <div class="match-score">
-          <span class="score-num" style="color:{% if m.home_score > m.away_score %}var(--accent){% elif m.home_score < m.away_score %}var(--accent3){% else %}var(--text){% endif %}">{{ m.home_score }}</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:0 12px;">
+          <span class="score-num {{ h_cls }}" style="border-radius:3px;padding:0 4px;">{{ hs }}</span>
           <span class="score-sep">×</span>
-          <span class="score-num" style="color:{% if m.away_score > m.home_score %}var(--accent){% elif m.away_score < m.home_score %}var(--accent3){% else %}var(--text){% endif %}">{{ m.away_score }}</span>
+          <span class="score-num {{ a_cls }}" style="border-radius:3px;padding:0 4px;">{{ as_ }}</span>
         </div>
-        <div class="match-player away">
-          <div class="player-name">{{ m.away_nickname }}</div>
+        <div style="flex:1;text-align:right;">
+          <div class="player-name {{ a_cls }}" style="border-radius:3px;padding:1px 5px;display:inline-block;">{{ m.away_nickname }}</div>
           <div class="player-team">{{ m.away_team }}</div>
           {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" class="team-crest" onerror="this.style.display='none'">{% endif %}
         </div>
-        <div style="margin-left:auto;text-align:right;min-width:120px;">
+        <div style="margin-left:12px;text-align:right;min-width:110px;">
           <div style="font-size:11px;color:var(--muted);">{{ m.season_name }}</div>
           <div style="font-size:10px;color:var(--muted);margin-top:2px;">{{ m.kickoff[:10] if m.kickoff else '' }}</div>
         </div>
       </div>
       {% else %}
-      <p style="color:var(--muted);text-align:center;padding:40px;">Nenhuma partida coletada ainda. Aguardando próxima varredura...</p>
+      <p style="color:var(--muted);text-align:center;padding:40px;">Aguardando próxima varredura...</p>
       {% endfor %}
     </div>
   </div>

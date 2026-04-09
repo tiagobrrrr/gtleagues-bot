@@ -3,8 +3,11 @@
 {% block content %}
 <div class="container">
   <div class="page-header">
-    <div class="page-title">Players</div>
-    <div class="page-subtitle">Classificação geral por temporada</div>
+    <div class="page-header-left">
+      <div class="page-title">Players</div>
+      <div class="page-subtitle">Classificação geral por temporada</div>
+    </div>
+    <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
   </div>
   <div class="card">
     <div class="table-wrap">
@@ -14,8 +17,7 @@
             <th>#</th><th>Player</th><th>Time</th>
             <th>PJ</th><th>V</th><th>E</th><th>D</th>
             <th>GF</th><th>GC</th><th>Saldo</th><th>Pts</th>
-            <th>Méd. GF/P ↓</th><th>Méd. GC/P</th>
-            <th>% V</th><th>Temporada</th>
+            <th>Méd GF/P ↓</th><th>Méd GC/P</th><th>% V</th><th>Temporada</th>
           </tr>
         </thead>
         <tbody>
@@ -25,12 +27,12 @@
             <td style="font-weight:700;font-size:14px;">{{ s.nickname }}</td>
             <td style="font-size:12px;color:var(--muted);">{{ s.team }}</td>
             <td>{{ s.games_played }}</td>
-            <td style="color:var(--accent);">{{ s.wins }}</td>
+            <td class="cell-win">{{ s.wins }}</td>
             <td style="color:var(--muted);">{{ s.draws }}</td>
-            <td style="color:var(--accent3);">{{ s.losses }}</td>
-            <td style="color:var(--accent);">{{ s.goals_for }}</td>
-            <td style="color:var(--accent3);">{{ s.goals_against }}</td>
-            <td style="color:{% if s.goals_diff>0 %}var(--accent){% elif s.goals_diff<0 %}var(--accent3){% else %}var(--muted){% endif %}">
+            <td class="cell-lose">{{ s.losses }}</td>
+            <td class="cell-win">{{ s.goals_for }}</td>
+            <td class="cell-lose">{{ s.goals_against }}</td>
+            <td class="{% if s.goals_diff>0 %}cell-win{% elif s.goals_diff<0 %}cell-lose{% else %}cell-draw{% endif %}">
               {{ '+' if s.goals_diff > 0 else '' }}{{ s.goals_diff }}
             </td>
             <td style="font-family:'Bebas Neue';font-size:18px;">{{ s.points }}</td>
@@ -47,7 +49,7 @@
             <td style="font-size:11px;color:var(--muted);">{{ s.season_id }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="15" style="text-align:center;color:var(--muted);padding:40px;">Aguardando dados da API...</td></tr>
+          <tr><td colspan="15" style="text-align:center;color:var(--muted);padding:40px;">Aguardando dados...</td></tr>
           {% endfor %}
         </tbody>
       </table>

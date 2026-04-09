@@ -3,19 +3,37 @@
 {% block content %}
 <div class="container">
   <div class="page-header">
-    <div class="page-title">Relatórios</div>
-    <div class="page-subtitle">Destaques e rankings</div>
+    <div class="page-header-left">
+      <div class="page-title">Relatórios</div>
+      <div class="page-subtitle">Destaques e rankings</div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
+      <button onclick="sendEmailNow()" class="btn btn-primary" id="btn-email">📧 Enviar Email Agora</button>
+    </div>
   </div>
+
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><span class="card-title">📈 Resumo Geral</span></div>
+    <div class="card-body">
+      <div class="stats-grid">
+        <div class="stat-box green"><div class="stat-value">{{ summary.total }}</div><div class="stat-label">Partidas Coletadas</div></div>
+        <div class="stat-box blue"><div class="stat-value">{{ summary.today }}</div><div class="stat-label">Hoje</div></div>
+        <div class="stat-box yellow"><div class="stat-value">{{ summary.seasons|length }}</div><div class="stat-label">Temporadas</div></div>
+      </div>
+    </div>
+  </div>
+
   <div class="grid-2">
     <div class="card">
       <div class="card-header"><span class="card-title">🥇 Top 10 — Maior Média de Gols</span></div>
       <div class="card-body" style="padding:0;">
         {% for s in top_scorers %}
-        <div style="display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">
           <span class="rank {% if loop.index<=3 %}top{% endif %}">{{ loop.index }}</span>
           <div style="flex:1;">
             <div style="font-weight:700;">{{ s.nickname }}</div>
-            <div style="font-size:11px;color:var(--muted);">{{ s.games_played }} partidas</div>
+            <div style="font-size:11px;color:var(--muted);">{{ s.games_played }} partidas · {{ s.goals_for }} gols</div>
           </div>
           <div style="text-align:right;">
             <div style="font-family:'Bebas Neue';font-size:26px;color:var(--accent);">{{ s.avg_goals_scored }}</div>
@@ -29,7 +47,7 @@
       <div class="card-header"><span class="card-title">🎮 Top 10 — Mais Partidas Jogadas</span></div>
       <div class="card-body" style="padding:0;">
         {% for s in most_games %}
-        <div style="display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">
           <span class="rank {% if loop.index<=3 %}top{% endif %}">{{ loop.index }}</span>
           <div style="flex:1;">
             <div style="font-weight:700;">{{ s.nickname }}</div>
@@ -44,15 +62,21 @@
       </div>
     </div>
   </div>
-  <div style="margin-top:20px;" class="card">
-    <div class="card-header"><span class="card-title">📈 Resumo Geral</span></div>
-    <div class="card-body">
-      <div class="stats-grid">
-        <div class="stat-box green"><div class="stat-value">{{ summary.total }}</div><div class="stat-label">Partidas Coletadas</div></div>
-        <div class="stat-box blue"><div class="stat-value">{{ summary.today }}</div><div class="stat-label">Hoje</div></div>
-        <div class="stat-box yellow"><div class="stat-value">{{ summary.seasons|length }}</div><div class="stat-label">Temporadas</div></div>
-      </div>
-    </div>
-  </div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+function sendEmailNow(){
+  const btn = document.getElementById('btn-email');
+  btn.textContent = '⏳ Enviando...';
+  btn.disabled = true;
+  fetch('/api/send-email-now', {method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      btn.textContent = d.sent ? '✅ Email Enviado!' : '❌ Erro ao enviar';
+      setTimeout(()=>{btn.textContent='📧 Enviar Email Agora';btn.disabled=false;}, 4000);
+    })
+    .catch(()=>{btn.textContent='❌ Erro';btn.disabled=false;});
+}
+</script>
 {% endblock %}

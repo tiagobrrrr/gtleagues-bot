@@ -2,17 +2,23 @@
 {% block title %}Partidas — GT Scout{% endblock %}
 {% block content %}
 <div class="container">
-  <div class="page-header" style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+  <div class="page-header">
     <div>
       <div class="page-title">Partidas</div>
       <div class="page-subtitle">Resultados coletados da GT Leagues</div>
     </div>
-    <form method="get" style="display:flex;gap:8px;align-items:center;">
-      <select name="season" onchange="this.form.submit()">
-        <option value="">Todas as temporadas</option>
-        {% for s in seasons %}<option value="{{ s }}" {% if s==selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
-      </select>
-    </form>
+    <div class="btn-group">
+      <form method="get" style="display:flex;gap:8px;align-items:center;">
+        <select name="season" onchange="this.form.submit()">
+          <option value="">Todas as temporadas</option>
+          {% for s in seasons %}<option value="{{ s }}" {% if s==selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </form>
+      <a href="/download/excel{% if selected %}?season={{ selected }}{% endif %}" class="btn btn-download">
+        ⬇ Download Excel
+      </a>
+      <button class="btn btn-email" onclick="sendEmailNow(this)">📧 Enviar Email Agora</button>
+    </div>
   </div>
 
   <div class="card">
@@ -20,17 +26,15 @@
       <table>
         <thead>
           <tr>
-            <th>#</th>
-            <th>Data</th>
-            <th>Casa</th>
+            <th>#</th><th>Data</th><th>Casa</th>
             <th style="text-align:center;">Placar</th>
-            <th>Visitante</th>
-            <th>Temporada</th>
-            <th>Canal</th>
+            <th>Visitante</th><th>Resultado</th><th>Temporada</th><th>Canal</th>
           </tr>
         </thead>
         <tbody>
           {% for m in pagination.items %}
+          {% set hs = m.home_score %}
+          {% set as_ = m.away_score %}
           <tr>
             <td style="color:var(--muted);font-size:11px;">W{{ m.week }}</td>
             <td style="color:var(--muted);font-size:12px;">{{ m.kickoff[:16].replace('T',' ') if m.kickoff else '—' }}</td>
@@ -38,36 +42,59 @@
               <div style="display:flex;align-items:center;gap:8px;">
                 {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
                 <div>
-                  <div style="font-weight:600;">{{ m.home_nickname }}</div>
+                  <div style="font-weight:600;
+                    {% if hs is not none and as_ is not none %}
+                      {% if hs > as_ %}color:var(--accent);
+                      {% elif hs < as_ %}color:var(--accent3);
+                      {% else %}color:#f5c842;{% endif %}
+                    {% endif %}">{{ m.home_nickname }}</div>
                   <div style="font-size:11px;color:var(--muted);">{{ m.home_team }}</div>
                 </div>
               </div>
             </td>
             <td style="text-align:center;">
               <span style="font-family:'Bebas Neue';font-size:20px;
-                color:{% if m.home_score > m.away_score %}var(--accent){% elif m.home_score < m.away_score %}var(--accent3){% else %}var(--text){% endif %}">
-                {{ m.home_score }}
+                color:{% if hs is not none and as_ is not none %}{% if hs>as_ %}var(--accent){% elif hs<as_ %}var(--accent3){% else %}#f5c842{% endif %}{% else %}var(--muted){% endif %}">
+                {{ hs if hs is not none else '—' }}
               </span>
               <span style="color:var(--muted);margin:0 4px;">×</span>
               <span style="font-family:'Bebas Neue';font-size:20px;
-                color:{% if m.away_score > m.home_score %}var(--accent){% elif m.away_score < m.home_score %}var(--accent3){% else %}var(--text){% endif %}">
-                {{ m.away_score }}
+                color:{% if hs is not none and as_ is not none %}{% if as_>hs %}var(--accent){% elif as_<hs %}var(--accent3){% else %}#f5c842{% endif %}{% else %}var(--muted){% endif %}">
+                {{ as_ if as_ is not none else '—' }}
               </span>
             </td>
             <td>
               <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
                 <div style="text-align:right;">
-                  <div style="font-weight:600;">{{ m.away_nickname }}</div>
+                  <div style="font-weight:600;
+                    {% if hs is not none and as_ is not none %}
+                      {% if as_ > hs %}color:var(--accent);
+                      {% elif as_ < hs %}color:var(--accent3);
+                      {% else %}color:#f5c842;{% endif %}
+                    {% endif %}">{{ m.away_nickname }}</div>
                   <div style="font-size:11px;color:var(--muted);">{{ m.away_team }}</div>
                 </div>
                 {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
               </div>
             </td>
+            <td>
+              {% if hs is not none and as_ is not none %}
+                {% if hs > as_ %}
+                  <span class="badge badge-green">✓ {{ m.home_nickname }}</span>
+                {% elif hs < as_ %}
+                  <span class="badge badge-green">✓ {{ m.away_nickname }}</span>
+                {% else %}
+                  <span class="badge badge-yellow">Empate</span>
+                {% endif %}
+              {% else %}
+                <span class="badge badge-gray">—</span>
+              {% endif %}
+            </td>
             <td style="font-size:11px;color:var(--muted);">{{ m.season_name }}</td>
             <td><span class="badge badge-gray">{{ m.channel or '—' }}</span></td>
           </tr>
           {% else %}
-          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:40px;">Nenhuma partida encontrada.</td></tr>
+          <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">Nenhuma partida encontrada.</td></tr>
           {% endfor %}
         </tbody>
       </table>
