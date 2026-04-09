@@ -20,7 +20,7 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 # ── Banco de Dados ─────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 # Fix Render/Neon: garante driver postgresql://
-DB_URL = DB_URL.replace("postgres://", "postgresql://")
+DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
