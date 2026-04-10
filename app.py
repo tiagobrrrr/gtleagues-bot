@@ -20,7 +20,7 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 # ── Banco de Dados ─────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 # Fix Render/Neon: garante driver postgresql://
-DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
+DB_URL = DB_URL.replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
@@ -28,6 +28,11 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_recycle": 300,
 }
 db.init_app(app)
+
+# Cria as tabelas automaticamente (necessário para gunicorn no Render)
+with app.app_context():
+    db.create_all()
+    logger.info("Tabelas criadas/verificadas no banco de dados.")
 
 INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 5))
 
