@@ -36,7 +36,7 @@ with app.app_context():
     db.create_all()
     logger.info("Tabelas criadas/verificadas no banco de dados.")
 
-INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 5))
+INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
 
 # ── Scheduler ──────────────────────────────────────────────────
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
