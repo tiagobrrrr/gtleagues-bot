@@ -15,7 +15,13 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 
+import pytz
 from openpyxl import Workbook
+
+BR_TZ = pytz.timezone('America/Sao_Paulo')
+def now_br():
+    from datetime import datetime
+    return datetime.now(BR_TZ)
 from openpyxl.styles import (
     PatternFill, Font, Alignment, Border, Side, GradientFill
 )
@@ -234,7 +240,7 @@ def send_excel_email(matches, recipient: str = None):
 
     try:
         xlsx_bytes = build_excel(matches)
-        now_str = datetime.now().strftime("%Y-%m-%d")
+        now_str = now_br().strftime("%Y-%m-%d")
         filename = f"gtscout_partidas_{now_str}.xlsx"
 
         msg = MIMEMultipart()
@@ -247,7 +253,7 @@ Olá!
 
 Segue em anexo o relatório completo de partidas da GT Leagues gerado pelo GT Scout Bot.
 
-📅 Data de geração: {datetime.now().strftime('%d/%m/%Y às %H:%M')}
+📅 Data de geração: {now_br().strftime('%d/%m/%Y às %H:%M')}
 ⚽ Total de partidas: {len(matches)}
 
 A planilha contém:

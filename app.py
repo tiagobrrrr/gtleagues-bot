@@ -2,7 +2,15 @@ import os
 import io
 import logging
 from datetime import datetime
+import pytz
 from flask import Flask, render_template, jsonify, request, send_file, flash, redirect, url_for
+
+# Fuso horário de São Paulo
+BR_TZ = pytz.timezone("America/Sao_Paulo")
+
+def now_br():
+    """Retorna datetime atual no horário de São Paulo."""
+    return datetime.now(BR_TZ)
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import func, or_, and_
@@ -54,7 +62,7 @@ def weekly_email_job():
 
 # Scraper a cada 5 minutos
 scheduler.add_job(scraper_job, "interval", minutes=INTERVAL,
-                  id="gt_scraper", next_run_time=datetime.now())
+                  id="gt_scraper", next_run_time=now_br())
 
 # Email toda segunda às 08:00 (configurável via env)
 weekly_day  = int(os.getenv("EMAIL_WEEKLY_DAY", 0))   # 0 = segunda
@@ -70,7 +78,7 @@ scheduler.start()
 # ── Helpers ────────────────────────────────────────────────────
 def get_summary():
     total = Match.query.filter(Match.home_score.isnot(None)).count()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_br().strftime("%Y-%m-%d")
     today_ct = Match.query.filter(
         Match.home_score.isnot(None),
         Match.kickoff.like(f"{today}%")
@@ -170,7 +178,7 @@ def index():
     summary = get_summary()
     recent  = Match.query.filter(Match.home_score.isnot(None))\
         .order_by(Match.kickoff.desc()).limit(8).all()
-    return render_template("index.html", summary=summary, recent=recent, now=datetime.now())
+    return render_template("index.html", summary=summary, recent=recent, now=now_br())
 
 
 @app.route("/matches")
@@ -234,7 +242,7 @@ def download_excel():
     matches = Match.query.filter(Match.home_score.isnot(None))\
         .order_by(Match.kickoff.desc()).all()
     xlsx = build_excel(matches)
-    now_str  = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    now_str  = now_br().strftime("%Y-%m-%d_%H-%M")
     filename = f"gtscout_{now_str}.xlsx"
     return send_file(
         io.BytesIO(xlsx),
