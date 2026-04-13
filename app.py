@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import func, or_, and_
 from models import db, Match, Player, PlayerStats
-from web_scraper import run_scraper
+from web_scraper import run_scraper, get_last_diag
 from excel_exporter import build_excel, send_excel_email
 
 load_dotenv()
@@ -301,6 +301,40 @@ def api_status():
         "status": "ok",
         "matches": Match.query.filter(Match.home_score.isnot(None)).count(),
         "scheduler": jobs
+    })
+
+
+
+# ── Diagnóstico ────────────────────────────────────────────────
+@app.route("/diagnostico")
+def diagnostico():
+    """Mostra status da última varredura e testa a API."""
+    import requests as req
+    diag = get_last_diag()
+    total = Match.query.count()
+
+    # Testa um endpoint real da API
+    test_url = "https://api.gtleagues.com/api/seasons/19414/fixtures"
+    try:
+        r = req.get(test_url, timeout=10,
+                    headers={"Accept": "application/json",
+                             "User-Agent": "Mozilla/5.0",
+                             "Referer": "https://www.gtleagues.com/"})
+        api_test = {
+            "url": test_url,
+            "status": r.status_code,
+            "bytes": len(r.content),
+            "preview": r.text[:300],
+        }
+    except Exception as e:
+        api_test = {"url": test_url, "error": str(e)}
+
+    return jsonify({
+        "bot": "GT Scout",
+        "db_matches": total,
+        "last_scrape": diag,
+        "api_test": api_test,
+        "season_ids_env": os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
     })
 
 
