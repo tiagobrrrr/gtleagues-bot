@@ -74,6 +74,14 @@ scheduler.add_job(weekly_email_job, "cron",
                   id="weekly_email")
 scheduler.start()
 
+# Executa primeira varredura imediatamente ao iniciar (como o bot de referência)
+logger.info("Executando varredura inicial...")
+try:
+    with app.app_context():
+        run_scraper()
+except Exception as e:
+    logger.error(f"Erro na varredura inicial: {e}")
+
 
 # ── Helpers ────────────────────────────────────────────────────
 def get_summary():
