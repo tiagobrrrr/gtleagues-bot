@@ -17,11 +17,21 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.gtleagues.com/api"
 SPORT_ID = 6
-HEADERS  = {
-    "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
-    "Referer": "https://www.gtleagues.com/",
-    "Origin":  "https://www.gtleagues.com",
+# Headers copiados exatamente do browser (necessário para passar pelo Cloudflare)
+HEADERS = {
+    "accept": "application/json",
+    "accept-encoding": "gzip, deflate, br, zstd",
+    "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "origin": "https://www.gtleagues.com",
+    "referer": "https://www.gtleagues.com/",
+    "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "priority": "u=1, i",
 }
 TIMEOUT = 25
 
