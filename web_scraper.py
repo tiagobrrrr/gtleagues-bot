@@ -1,99 +1,70 @@
 """
 web_scraper.py — GT Scout Bot
+Usa cloudscraper para contornar proteção Cloudflare da API GT Leagues.
+
 URLs confirmadas:
   Fixtures  : GET https://api.gtleagues.com/api/seasons/{seasonId}/fixtures?limit=1000&offset=0
   Standings : GET https://api.gtleagues.com/api/seasons/{seasonId}/standings?limit=1000&offset=0
-  Seasons   : GET https://api.gtleagues.com/api/sports/6/seasons
 """
 
 import os
-import requests
 import logging
 from datetime import datetime
 
+import cloudscraper
 from models import db, Match, Player, PlayerStats
 
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.gtleagues.com/api"
-SPORT_ID = 6
-# Headers copiados exatamente do browser (necessário para passar pelo Cloudflare)
-HEADERS = {
+
+# cloudscraper imita o comportamento real do Chrome/CF
+scraper = cloudscraper.create_scraper(
+    browser={
+        "browser": "chrome",
+        "platform": "windows",
+        "desktop": True,
+    }
+)
+scraper.headers.update({
     "accept": "application/json",
-    "accept-encoding": "gzip, deflate, br, zstd",
     "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     "origin": "https://www.gtleagues.com",
     "referer": "https://www.gtleagues.com/",
-    "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-    "priority": "u=1, i",
-}
-TIMEOUT = 25
+})
 
-# Armazena resultado do último diagnóstico
 last_diag = {}
 
+TIMEOUT = 30
 
-# ── Requisição com log completo ────────────────────────────────
+
+# ── Requisição ────────────────────────────────────────────────
 def _get(url, params=None):
     try:
-        full_url = requests.Request("GET", url, params=params).prepare().url
-        logger.info(f"  GET {full_url}")
-        r = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
+        logger.info(f"  GET {url}")
+        r = scraper.get(url, params=params, timeout=TIMEOUT)
         logger.info(f"  → HTTP {r.status_code} | {len(r.content)} bytes")
         if r.status_code != 200:
-            logger.warning(f"  → Body: {r.text[:300]}")
+            logger.warning(f"  → {r.text[:200]}")
             return None
-        data = r.json()
-        return data
+        return r.json()
     except Exception as e:
         logger.error(f"  → ERRO: {e}")
         return None
 
 
-# ── Busca season IDs ──────────────────────────────────────────
+# ── Season IDs ────────────────────────────────────────────────
 def get_season_ids():
-    """
-    Tenta descobrir seasons automaticamente.
-    Fallback para GT_SEASON_IDS do .env.
-    """
-    ids = []
-
-    # Tenta endpoint de seasons por sport
-    for endpoint in [
-        f"{API_BASE}/sports/{SPORT_ID}/seasons",
-        f"{API_BASE}/seasons?sportId={SPORT_ID}&limit=100&offset=0",
-        f"{API_BASE}/sports/{SPORT_ID}/fixtures?limit=5&offset=0",  # extrai seasonId dos fixtures
-    ]:
-        data = _get(endpoint)
-        if data:
-            items = data if isinstance(data, list) else data.get("data", data.get("seasons", []))
-            if isinstance(items, list) and items:
-                for item in items:
-                    sid = item.get("id") or item.get("seasonId")
-                    if sid and str(sid) not in ids:
-                        ids.append(str(sid))
-                if ids:
-                    logger.info(f"  Seasons descobertos via API: {ids}")
-                    return ids
-
-    # Fallback .env
     env_ids = os.getenv("GT_SEASON_IDS", "")
     if env_ids:
         ids = [s.strip() for s in env_ids.split(",") if s.strip()]
-        logger.info(f"  Usando season IDs do .env: {ids}")
+        logger.info(f"  Season IDs do .env: {ids}")
         return ids
-
-    logger.warning("  NENHUM season ID encontrado!")
+    logger.warning("  GT_SEASON_IDS não configurado no .env!")
     return []
 
 
-# ── Fixtures de uma season ────────────────────────────────────
+# ── Fixtures ──────────────────────────────────────────────────
 def fetch_fixtures(season_id):
     url  = f"{API_BASE}/seasons/{season_id}/fixtures"
     data = _get(url, {"limit": 1000, "offset": 0})
@@ -101,14 +72,13 @@ def fetch_fixtures(season_id):
         return []
     items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
     if not isinstance(items, list):
-        logger.warning(f"  Formato inesperado de fixtures: {type(items)}")
         return []
     done = [f for f in items if f.get("status") == 3]
-    logger.info(f"  Season {season_id}: {len(items)} fixtures totais, {len(done)} finalizadas")
+    logger.info(f"  Season {season_id}: {len(items)} total, {len(done)} finalizadas")
     return done
 
 
-# ── Standings de uma season ───────────────────────────────────
+# ── Standings ─────────────────────────────────────────────────
 def fetch_standings(season_id):
     url  = f"{API_BASE}/seasons/{season_id}/standings"
     data = _get(url, {"limit": 1000, "offset": 0})
@@ -117,11 +87,11 @@ def fetch_standings(season_id):
     players = data.get("data", data) if isinstance(data, dict) else data
     if not isinstance(players, list):
         return []
-    logger.info(f"  Season {season_id}: {len(players)} players nos standings")
+    logger.info(f"  Season {season_id}: {len(players)} players")
     return players
 
 
-# ── Parse de fixture ──────────────────────────────────────────
+# ── Parse ─────────────────────────────────────────────────────
 def parse_match(raw):
     try:
         stats      = (raw.get("result") or {}).get("stats", {})
@@ -181,7 +151,7 @@ def parse_match(raw):
             "away_score":        int(away_score) if away_score is not None else None,
         }
     except Exception as e:
-        logger.error(f"Parse error {raw.get('id')}: {e}")
+        logger.error(f"  Parse error {raw.get('id')}: {e}")
         return None
 
 
@@ -189,7 +159,8 @@ def parse_match(raw):
 def upsert_match(parsed):
     ex = Match.query.filter_by(match_id=parsed["match_id"]).first()
     if ex:
-        for k, v in parsed.items(): setattr(ex, k, v)
+        for k, v in parsed.items():
+            setattr(ex, k, v)
         return False
     db.session.add(Match(**parsed))
     return True
@@ -204,7 +175,8 @@ def upsert_stats(raw_p, season_id):
         except: return 0
 
     pid = str(raw_p.get("playerId", raw_p.get("id", "")))
-    if not pid: return
+    if not pid:
+        return
 
     ex = PlayerStats.query.filter_by(player_id=pid, season_id=str(season_id)).first()
     data = {
@@ -227,7 +199,8 @@ def upsert_stats(raw_p, season_id):
         "points_per_match":        _f(raw_p.get("points_per_match")),
     }
     if ex:
-        for k, v in data.items(): setattr(ex, k, v)
+        for k, v in data.items():
+            setattr(ex, k, v)
     else:
         db.session.add(PlayerStats(**data))
 
@@ -241,14 +214,16 @@ def run_scraper():
     import pytz
     now = datetime.now(pytz.timezone("America/Sao_Paulo")).strftime("%H:%M:%S")
     logger.info(f"{'='*50}")
-    logger.info(f"[{now}] VARREDURA GT SCOUT")
+    logger.info(f"[{now}] VARREDURA GT SCOUT (cloudscraper)")
     logger.info(f"{'='*50}")
 
-    total_new = 0; total_upd = 0; total_play = 0
+    total_new = 0
+    total_upd = 0
+    total_play = 0
 
     season_ids = get_season_ids()
     if not season_ids:
-        last_diag = {"error": "Nenhum season ID encontrado", "ts": now}
+        last_diag = {"error": "GT_SEASON_IDS não configurado", "ts": now}
         return
 
     for sid in season_ids:
@@ -267,17 +242,16 @@ def run_scraper():
             upsert_stats(raw_p, sid)
             total_play += 1
 
-        total_new += n; total_upd += u
-        logger.info(f"  → {n} novas, {u} atualizadas")
+        total_new += n
+        total_upd += u
+        if fixtures:
+            logger.info(f"  → {n} novas, {u} atualizadas")
 
     try:
         db.session.commit()
         last_diag = {
-            "ts": now,
-            "seasons": len(season_ids),
-            "new": total_new,
-            "updated": total_upd,
-            "players": total_play,
+            "ts": now, "seasons": len(season_ids),
+            "new": total_new, "updated": total_upd, "players": total_play,
         }
         logger.info(f"CONCLUÍDO: {total_new} novas | {total_upd} atualiz | {total_play} players")
     except Exception as e:
