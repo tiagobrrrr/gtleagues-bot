@@ -305,6 +305,50 @@ def api_status():
 
 
 
+# ── Webhook — recebe dados do coletor local ────────────────────
+@app.route("/webhook/ingest", methods=["POST"])
+def webhook_ingest():
+    """
+    Recebe dados coletados pelo coletor_local.py (roda no PC do usuário).
+    O coletor tem IP residencial que passa pelo Cloudflare.
+    """
+    from web_scraper import parse_match, upsert_match, upsert_stats
+    import os
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON inválido"}), 400
+
+    # Verifica chave
+    key = os.getenv("WEBHOOK_KEY", "gtscout-webhook-2026")
+    if data.get("key") != key:
+        return jsonify({"error": "Chave inválida"}), 403
+
+    fixtures  = data.get("fixtures", [])
+    standings = data.get("standings", [])
+    new_ct = upd_ct = play_ct = 0
+
+    for raw in fixtures:
+        parsed = parse_match(raw)
+        if parsed:
+            is_new = upsert_match(parsed)
+            if is_new: new_ct += 1
+            else: upd_ct += 1
+
+    for raw_p in standings:
+        season_id = raw_p.pop("_season_id", "unknown")
+        upsert_stats(raw_p, season_id)
+        play_ct += 1
+
+    try:
+        db.session.commit()
+        logger.info(f"Webhook: {new_ct} novas | {upd_ct} atualizadas | {play_ct} players")
+        return jsonify({"ok": True, "new": new_ct, "updated": upd_ct, "players": play_ct})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Diagnóstico ────────────────────────────────────────────────
 @app.route("/diagnostico")
 def diagnostico():
