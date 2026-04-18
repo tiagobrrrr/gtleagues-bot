@@ -305,6 +305,14 @@ def api_status():
 
 
 
+# ── IDs conhecidos (para o coletor local evitar duplicatas) ───
+@app.route("/api/known-ids")
+def known_ids():
+    """Retorna todos os match_ids já salvos no banco."""
+    ids = [r[0] for r in db.session.query(Match.match_id).all()]
+    return jsonify({"ids": ids, "total": len(ids)})
+
+
 # ── Webhook — recebe dados do coletor local ────────────────────
 @app.route("/webhook/ingest", methods=["POST"])
 def webhook_ingest():

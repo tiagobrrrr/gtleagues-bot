@@ -92,6 +92,19 @@ def wake_up_bot():
         return False
 
 
+def get_known_ids():
+    """Busca os IDs de partidas já salvas no banco do Render."""
+    try:
+        r = requests.get(f"{RENDER_URL}/api/known-ids", timeout=30)
+        if r.status_code == 200:
+            ids = set(r.json().get("ids", []))
+            logger.info(f"Bot já tem {len(ids)} partidas no banco.")
+            return ids
+    except Exception as e:
+        logger.warning(f"Não foi possível buscar IDs conhecidos: {e}")
+    return set()
+
+
 def post_with_retry(url, payload):
     """POST com 3 tentativas e espera progressiva."""
     import time
@@ -168,6 +181,19 @@ if __name__ == "__main__":
     if fixtures or standings:
         # Acorda o bot primeiro (Render free tier dorme)
         wake_up_bot()
-        send_to_bot(fixtures, standings)
+
+        # Filtra só partidas novas (evita reenviar o que já está no banco)
+        known = get_known_ids()
+        if known:
+            before = len(fixtures)
+            fixtures = [f for f in fixtures if str(f.get("id", "")) not in known]
+            skipped = before - len(fixtures)
+            if skipped:
+                logger.info(f"Ignorando {skipped} partidas já salvas. Enviando {len(fixtures)} novas.")
+
+        if not fixtures and not standings:
+            logger.info("✅ Nenhuma partida nova para enviar.")
+        else:
+            send_to_bot(fixtures, standings)
     else:
         logger.warning("Nada coletado — verifique sua conexão")
