@@ -1,11 +1,29 @@
 {% extends "layout.html" %}
-{% block title %}Dashboard — GT Scout{% endblock %}
+{% block title %}Dashboard — GT Scout
+{% block scripts %}
+<script>
+function atualizarDataHora() {
+  const agora = new Date();
+  const dia  = String(agora.getDate()).padStart(2,'0');
+  const mes  = String(agora.getMonth()+1).padStart(2,'0');
+  const ano  = agora.getFullYear();
+  const h    = String(agora.getHours()).padStart(2,'0');
+  const m    = String(agora.getMinutes()).padStart(2,'0');
+  const s    = String(agora.getSeconds()).padStart(2,'0');
+  const el   = document.getElementById('data-hora');
+  if (el) el.textContent = `${dia}/${mes}/${ano} ÀS ${h}:${m}:${s}`;
+}
+atualizarDataHora();
+setInterval(atualizarDataHora, 1000);
+</script>
+{% endblock %}
+{% endblock %}
 {% block content %}
 <div class="container">
   <div class="page-header">
     <div class="page-header-left">
       <div class="page-title">Dashboard</div>
-      <div class="page-subtitle">GT Leagues · {{ now.strftime('%d/%m/%Y') }} · Atualizado às {{ now.strftime('%H:%M:%S') }}</div>
+      <div class="page-subtitle">GT LEAGUES · <span id="data-hora">--/--/---- ÀS --:--:--</span></div>
     </div>
     <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
   </div>
