@@ -80,22 +80,81 @@ def collect():
     return all_fixtures, all_standings
 
 
-def send_to_bot(fixtures, standings):
-    url = f"{RENDER_URL}/webhook/ingest"
-    payload = {
-        "key":       WEBHOOK_KEY,
-        "fixtures":  fixtures,
-        "standings": standings,
-    }
+def wake_up_bot():
+    """Acorda o Render (plano gratuito dorme após inatividade)."""
     try:
-        r = requests.post(url, json=payload, timeout=60)
-        if r.status_code == 200:
-            result = r.json()
-            logger.info(f"✅ Bot recebeu: {result}")
-        else:
-            logger.error(f"❌ Bot retornou HTTP {r.status_code}: {r.text[:200]}")
+        logger.info("Acordando o bot no Render...")
+        r = requests.get(f"{RENDER_URL}/", timeout=60)
+        logger.info(f"Bot respondeu: HTTP {r.status_code}")
+        return r.status_code == 200
     except Exception as e:
-        logger.error(f"❌ Erro ao enviar para o bot: {e}")
+        logger.warning(f"Aviso ao acordar: {e}")
+        return False
+
+
+def post_with_retry(url, payload):
+    """POST com 3 tentativas e espera progressiva."""
+    import time
+    for tentativa in range(1, 4):
+        try:
+            r = requests.post(url, json=payload, timeout=90)
+            if r.status_code == 200:
+                return r.json()
+            elif r.status_code in (502, 503, 504):
+                espera = tentativa * 20
+                logger.warning(f"  HTTP {r.status_code}, aguardando {espera}s...")
+                time.sleep(espera)
+            else:
+                logger.error(f"  HTTP {r.status_code}: {r.text[:200]}")
+                return None
+        except requests.exceptions.Timeout:
+            logger.warning(f"  Timeout, aguardando {tentativa * 10}s...")
+            import time as t; t.sleep(tentativa * 10)
+        except Exception as e:
+            logger.error(f"  Erro: {e}")
+            return None
+    return None
+
+
+def send_to_bot(fixtures, standings):
+    import time
+    url = f"{RENDER_URL}/webhook/ingest"
+    BATCH = 40  # lotes menores para evitar timeout
+
+    total_new = total_upd = total_play = 0
+
+    # Envia fixtures em lotes
+    for i in range(0, max(len(fixtures), 1), BATCH):
+        lote_fix = fixtures[i:i+BATCH]
+        lote_std = standings[i:i+BATCH] if i < len(standings) else []
+        lote_num = i // BATCH + 1
+        total_lotes = (max(len(fixtures), 1) + BATCH - 1) // BATCH
+        logger.info(f"Enviando lote {lote_num}/{total_lotes} ({len(lote_fix)} partidas)...")
+
+        payload = {"key": WEBHOOK_KEY, "fixtures": lote_fix, "standings": lote_std}
+        result = post_with_retry(url, payload)
+
+        if result:
+            total_new += result.get("new", 0)
+            total_upd += result.get("updated", 0)
+            total_play += result.get("players", 0)
+            logger.info(f"  ✅ {result}")
+        else:
+            logger.error(f"  ❌ Lote {lote_num} falhou")
+
+        if i + BATCH < len(fixtures):
+            time.sleep(2)  # pequena pausa entre lotes
+
+    # Envia standings restantes
+    if len(standings) > len(fixtures):
+        resto = standings[len(fixtures):]
+        logger.info(f"Enviando standings restantes ({len(resto)})...")
+        payload = {"key": WEBHOOK_KEY, "fixtures": [], "standings": resto}
+        result = post_with_retry(url, payload)
+        if result:
+            total_play += result.get("players", 0)
+
+    logger.info(f"\n✅ TOTAL FINAL: {total_new} novas | {total_upd} atualizadas | {total_play} players")
 
 
 if __name__ == "__main__":
@@ -107,7 +166,8 @@ if __name__ == "__main__":
     logger.info(f"\nTotal coletado: {len(fixtures)} partidas | {len(standings)} registros de players")
 
     if fixtures or standings:
-        logger.info("Enviando para o Render...")
+        # Acorda o bot primeiro (Render free tier dorme)
+        wake_up_bot()
         send_to_bot(fixtures, standings)
     else:
         logger.warning("Nada coletado — verifique sua conexão")
