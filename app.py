@@ -86,13 +86,14 @@ except Exception as e:
 # ── Helpers ────────────────────────────────────────────────────
 def get_summary():
     total = Match.query.filter(Match.home_score.isnot(None)).count()
+    total_all = Match.query.count()
     today = now_br().strftime("%Y-%m-%d")
     today_ct = Match.query.filter(
         Match.home_score.isnot(None),
         Match.kickoff.like(f"{today}%")
     ).count()
     seasons = [r[0] for r in db.session.query(Match.season_id).distinct().all() if r[0]]
-    return {"total": total, "today": today_ct, "seasons": seasons}
+    return {"total": total, "total_all": total_all, "today": today_ct, "seasons": seasons}
 
 
 def avg_goals_individual():
@@ -185,7 +186,7 @@ def h2h_stats(p1_nick, p2_nick):
 def index():
     summary = get_summary()
     recent  = Match.query.filter(Match.home_score.isnot(None))\
-        .order_by(Match.kickoff.desc()).limit(8).all()
+        .order_by(Match.kickoff.desc()).limit(12).all()
     return render_template("index.html", summary=summary, recent=recent, now=now_br())
 
 
@@ -247,17 +248,22 @@ def reports():
 # ── Download Excel ─────────────────────────────────────────────
 @app.route("/download/excel")
 def download_excel():
-    matches = Match.query.filter(Match.home_score.isnot(None))\
-        .order_by(Match.kickoff.desc()).all()
-    xlsx = build_excel(matches)
-    now_str  = now_br().strftime("%Y-%m-%d_%H-%M")
-    filename = f"gtscout_{now_str}.xlsx"
-    return send_file(
-        io.BytesIO(xlsx),
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=filename
-    )
+    try:
+        matches = Match.query.filter(Match.home_score.isnot(None))            .order_by(Match.kickoff.desc()).all()
+        if not matches:
+            return "Nenhuma partida coletada ainda.", 404
+        xlsx = build_excel(matches)
+        now_str  = now_br().strftime("%Y-%m-%d_%H-%M")
+        filename = f"gtscout_{now_str}.xlsx"
+        return send_file(
+            io.BytesIO(xlsx),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        logger.error(f"Erro download Excel: {e}")
+        return f"Erro ao gerar planilha: {str(e)}", 500
 
 
 @app.route("/download/excel/h2h")

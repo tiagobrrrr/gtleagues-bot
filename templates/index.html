@@ -30,8 +30,8 @@ setInterval(atualizarDataHora, 1000);
 
   <div class="stats-grid">
     <div class="stat-box green">
-      <div class="stat-value">{{ summary.total }}</div>
-      <div class="stat-label">Total de Partidas</div>
+      <div class="stat-value" id="total-counter">{{ summary.total }}</div>
+      <div class="stat-label">Partidas Coletadas</div>
     </div>
     <div class="stat-box blue">
       <div class="stat-value">{{ summary.today }}</div>
@@ -40,6 +40,10 @@ setInterval(atualizarDataHora, 1000);
     <div class="stat-box yellow">
       <div class="stat-value">{{ summary.seasons|length }}</div>
       <div class="stat-label">Temporadas</div>
+    </div>
+    <div class="stat-box red">
+      <div class="stat-value">{{ summary.total_all }}</div>
+      <div class="stat-label">Total no Banco</div>
     </div>
   </div>
 
