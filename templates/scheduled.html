@@ -1,0 +1,65 @@
+{% extends "layout.html" %}
+{% block title %}Agendadas — GT Scout{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">📅 Partidas Agendadas</h1>
+  <span class="text-muted text-sm">Atualizado: {{ now.strftime('%d/%m/%Y %H:%M') }}</span>
+</div>
+
+{% if not matches %}
+<div class="card" style="text-align:center; padding: 2.5rem; color: var(--muted);">
+  <div style="font-size:2.5rem; margin-bottom:.75rem;">📭</div>
+  <p>Nenhuma partida agendada encontrada no momento.</p>
+  <p class="text-sm mt-1">O bot busca automaticamente a cada 15 minutos.</p>
+</div>
+{% else %}
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Data / Hora</th>
+        <th>Semana</th>
+        <th>Temporada</th>
+        <th style="text-align:center">Player Casa</th>
+        <th style="text-align:center">×</th>
+        <th style="text-align:center">Player Visitante</th>
+        <th style="text-align:center">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in matches %}
+      <tr>
+        <td class="text-muted">{{ loop.index }}</td>
+        <td>
+          {% if m.kickoff %}
+            {{ m.kickoff[:16]|replace('T',' ') }}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td class="tc text-muted">{{ m.week or '—' }}</td>
+        <td class="text-muted" style="font-size:.8rem;">{{ m.season_name or '—' }}</td>
+        <td class="tc" style="font-weight:600;">{{ m.home_nickname or '—' }}</td>
+        <td class="tc text-muted">×</td>
+        <td class="tc" style="font-weight:600;">{{ m.away_nickname or '—' }}</td>
+        <td class="tc">
+          {% if m.status == 0 %}
+            <span class="badge badge-gray">Agendada</span>
+          {% elif m.status == 1 %}
+            <span class="badge badge-yellow">Em andamento</span>
+          {% elif m.status == 2 %}
+            <span class="badge badge-blue">Intervalo</span>
+          {% else %}
+            <span class="badge badge-gray">Status {{ m.status }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted text-sm mt-1">{{ matches|length }} partida(s) agendada(s) encontrada(s).</p>
+{% endif %}
+{% endblock %}

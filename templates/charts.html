@@ -1,57 +1,223 @@
 {% extends "layout.html" %}
 {% block title %}Gráficos — GT Scout{% endblock %}
-{% block extra_head %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  .chart-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  canvas { max-height: 380px; }
+  #player-detail { display: none; }
+</style>
 {% endblock %}
+
 {% block content %}
-<div class="container">
-  <div class="page-header">
-    <div class="page-title">Gráficos</div>
-    <div class="page-subtitle">Visualizações de desempenho</div>
-  </div>
-  <div class="grid-2" style="margin-bottom:24px;">
-    <div class="card">
-      <div class="card-header"><span class="card-title">⚽ Média de Gols Marcados / Partida</span></div>
-      <div class="card-body"><canvas id="chartScored" height="260"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">🛡️ Média de Gols Sofridos / Partida</span></div>
-      <div class="card-body"><canvas id="chartConceded" height="260"></canvas></div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-header"><span class="card-title">📊 Gols Marcados vs Sofridos</span></div>
-    <div class="card-body"><canvas id="chartBoth" height="160"></canvas></div>
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">📈 Gráficos</h1>
+  <a href="/download/excel/charts" class="btn btn-green">⬇ Baixar Dados</a>
+</div>
+
+<!-- Busca por player -->
+<div class="card mb-2">
+  <div class="flex gap-2 items-center" style="flex-wrap:wrap;">
+    <label style="color:var(--muted); font-size:.875rem;">Buscar player:</label>
+    <input type="search" id="player-search" placeholder="Digite o nome..." style="min-width:220px;" list="player-list">
+    <datalist id="player-list">
+      {% for n in nicknames %}
+      <option value="{{ n }}">
+      {% endfor %}
+    </datalist>
+    <button class="btn btn-blue" onclick="showPlayer()">Ver Gráfico</button>
+    <button class="btn btn-gray" onclick="clearPlayer()">Limpar</button>
   </div>
 </div>
-{% endblock %}
-{% block scripts %}
+
+<!-- Gráfico individual do player selecionado -->
+<div id="player-detail" class="chart-card mb-2">
+  <h2 class="section-title" id="player-detail-title">Player</h2>
+  <div class="grid-3" style="margin-bottom:1rem;">
+    <div class="stat-box"><div class="value" id="pd-pj">—</div><div class="label">Partidas</div></div>
+    <div class="stat-box"><div class="value text-green" id="pd-gf">—</div><div class="label">Gols Feitos</div></div>
+    <div class="stat-box"><div class="value text-red" id="pd-gc">—</div><div class="label">Gols Sofridos</div></div>
+    <div class="stat-box"><div class="value" id="pd-avg-gf">—</div><div class="label">Méd. GF/P</div></div>
+    <div class="stat-box"><div class="value" id="pd-avg-gc">—</div><div class="label">Méd. GC/P</div></div>
+    <div class="stat-box"><div class="value" id="pd-saldo">—</div><div class="label">Saldo de Gols</div></div>
+  </div>
+  <canvas id="playerChart" height="200"></canvas>
+</div>
+
+<!-- Gráficos gerais -->
+<div class="grid-2 mb-2">
+  <div class="chart-card">
+    <h2 class="section-title">Top 15 — Média de Gols Feitos/Partida</h2>
+    <canvas id="chartGF"></canvas>
+  </div>
+  <div class="chart-card">
+    <h2 class="section-title">Top 15 — Média de Gols Sofridos/Partida</h2>
+    <canvas id="chartGC"></canvas>
+  </div>
+</div>
+
+<div class="grid-2 mb-2">
+  <div class="chart-card">
+    <h2 class="section-title">Top 15 — Média Total de Gols/Partida</h2>
+    <canvas id="chartTotal"></canvas>
+  </div>
+  <div class="chart-card">
+    <h2 class="section-title">Top 15 — Partidas Jogadas</h2>
+    <canvas id="chartPJ"></canvas>
+  </div>
+</div>
+
+<div class="chart-card mb-2">
+  <h2 class="section-title">Saldo de Gols por Player (Top 20)</h2>
+  <canvas id="chartSaldo" style="max-height:420px;"></canvas>
+</div>
+
 <script>
-const stats = {{ stats | tojson }};
-const top = stats.slice(0,15);
-const labels = top.map(s=>s.nickname);
-const scored = top.map(s=>s.avg_goals_scored);
-const conceded = top.map(s=>s.avg_goals_conceded);
-const C = { green:'#00e5a0', red:'#ff4d6d', blue:'#0099ff', bg:'#181c22', border:'#1e2530', text:'#5a6478' };
-Chart.defaults.color = C.text;
-Chart.defaults.borderColor = C.border;
-function barChart(id, labels, data, color, label){
-  new Chart(document.getElementById(id),{
-    type:'bar',
-    data:{ labels, datasets:[{label, data, backgroundColor: color+'33', borderColor: color, borderWidth:2, borderRadius:4}]},
-    options:{ plugins:{legend:{display:false}}, scales:{ x:{ticks:{font:{family:'Barlow Condensed',size:11}}}, y:{beginAtZero:true} } }
+const RAW = {{ stats_json|safe }};
+
+const COLORS = {
+  green: 'rgba(0,229,160,0.85)',
+  greenBorder: 'rgba(0,229,160,1)',
+  red: 'rgba(255,107,107,0.85)',
+  redBorder: 'rgba(255,107,107,1)',
+  blue: 'rgba(88,166,255,0.85)',
+  blueBorder: 'rgba(88,166,255,1)',
+  yellow: 'rgba(255,215,0,0.75)',
+  yellowBorder: 'rgba(255,215,0,1)',
+  purple: 'rgba(188,140,255,0.75)',
+};
+
+const chartDefaults = {
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { ticks: { color: '#8b949e', font: { size: 11 } }, grid: { color: '#21262d' } },
+    y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' }, beginAtZero: true }
+  }
+};
+
+function makeBar(id, labels, data, color, borderColor) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data, backgroundColor: color, borderColor: borderColor, borderWidth: 1, borderRadius: 4 }]
+    },
+    options: { ...chartDefaults, responsive: true }
   });
 }
-barChart('chartScored', labels, scored, C.green, 'Média GF/Partida');
-barChart('chartConceded', labels, conceded, C.red, 'Média GC/Partida');
-new Chart(document.getElementById('chartBoth'),{
-  type:'bar',
-  data:{ labels, datasets:[
-    {label:'Méd. Marcados', data:scored, backgroundColor:C.green+'44', borderColor:C.green, borderWidth:2, borderRadius:4},
-    {label:'Méd. Sofridos', data:conceded, backgroundColor:C.red+'44', borderColor:C.red, borderWidth:2, borderRadius:4},
-  ]},
-  options:{ plugins:{legend:{labels:{font:{family:'Barlow'}}}},
-    scales:{ x:{ticks:{font:{family:'Barlow Condensed',size:11}}}, y:{beginAtZero:true} } }
+
+// Top 15 por avg_goals_scored
+const top15gf = RAW.slice(0, 15);
+makeBar('chartGF',
+  top15gf.map(s => s.nickname),
+  top15gf.map(s => s.avg_goals_scored),
+  COLORS.green, COLORS.greenBorder
+);
+
+// Top 15 por avg_goals_conceded
+const sortedGC = [...RAW].sort((a,b) => b.avg_goals_conceded - a.avg_goals_conceded).slice(0,15);
+makeBar('chartGC',
+  sortedGC.map(s => s.nickname),
+  sortedGC.map(s => s.avg_goals_conceded),
+  COLORS.red, COLORS.redBorder
+);
+
+// Top 15 por avg_total
+const sortedTotal = [...RAW].sort((a,b) => b.avg_total_goals - a.avg_total_goals).slice(0,15);
+makeBar('chartTotal',
+  sortedTotal.map(s => s.nickname),
+  sortedTotal.map(s => s.avg_total_goals),
+  COLORS.blue, COLORS.blueBorder
+);
+
+// Top 15 por partidas jogadas
+const sortedPJ = [...RAW].sort((a,b) => b.games_played - a.games_played).slice(0,15);
+makeBar('chartPJ',
+  sortedPJ.map(s => s.nickname),
+  sortedPJ.map(s => s.games_played),
+  COLORS.purple, COLORS.purple
+);
+
+// Saldo top 20
+const top20saldo = [...RAW].sort((a,b) => b.goals_diff - a.goals_diff).slice(0,20);
+const saldoColors = top20saldo.map(s => s.goals_diff >= 0 ? COLORS.green : COLORS.red);
+const saldoBorders = top20saldo.map(s => s.goals_diff >= 0 ? COLORS.greenBorder : COLORS.redBorder);
+const ctxSaldo = document.getElementById('chartSaldo');
+if (ctxSaldo) {
+  new Chart(ctxSaldo, {
+    type: 'bar',
+    data: {
+      labels: top20saldo.map(s => s.nickname),
+      datasets: [{
+        data: top20saldo.map(s => s.goals_diff),
+        backgroundColor: saldoColors,
+        borderColor: saldoBorders,
+        borderWidth: 1,
+        borderRadius: 4
+      }]
+    },
+    options: { ...chartDefaults, responsive: true }
+  });
+}
+
+// ── Gráfico individual por player ──────────────────────────
+let playerChartInst = null;
+
+function showPlayer() {
+  const query = document.getElementById('player-search').value.trim().toLowerCase();
+  const player = RAW.find(s => s.nickname.toLowerCase() === query ||
+                               s.nickname.toLowerCase().includes(query));
+  if (!player) { alert('Player não encontrado.'); return; }
+
+  document.getElementById('player-detail').style.display = 'block';
+  document.getElementById('player-detail-title').textContent = player.nickname;
+  document.getElementById('pd-pj').textContent   = player.games_played;
+  document.getElementById('pd-gf').textContent   = player.goals_for;
+  document.getElementById('pd-gc').textContent   = player.goals_against;
+  document.getElementById('pd-avg-gf').textContent = player.avg_goals_scored.toFixed(2);
+  document.getElementById('pd-avg-gc').textContent = player.avg_goals_conceded.toFixed(2);
+  const saldo = player.goals_for - player.goals_against;
+  const sd = document.getElementById('pd-saldo');
+  sd.textContent = (saldo > 0 ? '+' : '') + saldo;
+  sd.style.color = saldo >= 0 ? 'var(--green)' : 'var(--red)';
+
+  const ctx = document.getElementById('playerChart');
+  if (playerChartInst) playerChartInst.destroy();
+  playerChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['V', 'E', 'D', 'GF', 'GC', 'Méd.GF', 'Méd.GC', 'Méd.Tot'],
+      datasets: [{
+        data: [
+          player.wins, player.draws, player.losses,
+          player.goals_for, player.goals_against,
+          player.avg_goals_scored, player.avg_goals_conceded, player.avg_total_goals
+        ],
+        backgroundColor: [
+          COLORS.green, COLORS.yellow, COLORS.red,
+          COLORS.green, COLORS.red,
+          COLORS.blue, COLORS.red, COLORS.purple
+        ],
+        borderRadius: 4
+      }]
+    },
+    options: { ...chartDefaults, responsive: true }
+  });
+
+  document.getElementById('player-detail').scrollIntoView({ behavior: 'smooth' });
+}
+
+function clearPlayer() {
+  document.getElementById('player-search').value = '';
+  document.getElementById('player-detail').style.display = 'none';
+  if (playerChartInst) { playerChartInst.destroy(); playerChartInst = null; }
+}
+
+document.getElementById('player-search').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') showPlayer();
 });
 </script>
 {% endblock %}

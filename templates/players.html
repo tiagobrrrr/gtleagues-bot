@@ -1,59 +1,50 @@
 {% extends "layout.html" %}
 {% block title %}Players — GT Scout{% endblock %}
+
 {% block content %}
-<div class="container">
-  <div class="page-header">
-    <div class="page-header-left">
-      <div class="page-title">Players</div>
-      <div class="page-subtitle">Classificação geral por temporada</div>
-    </div>
-    <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
-  </div>
-  <div class="card">
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>#</th><th>Player</th><th>Time</th>
-            <th>PJ</th><th>V</th><th>E</th><th>D</th>
-            <th>GF</th><th>GC</th><th>Saldo</th><th>Pts</th>
-            <th>Méd GF/P ↓</th><th>Méd GC/P</th><th>% V</th><th>Temporada</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for s in all_stats %}
-          <tr>
-            <td><span class="rank {% if loop.index<=3 %}top{% endif %}">{{ loop.index }}</span></td>
-            <td style="font-weight:700;font-size:14px;">{{ s.nickname }}</td>
-            <td style="font-size:12px;color:var(--muted);">{{ s.team }}</td>
-            <td>{{ s.games_played }}</td>
-            <td class="cell-win">{{ s.wins }}</td>
-            <td style="color:var(--muted);">{{ s.draws }}</td>
-            <td class="cell-lose">{{ s.losses }}</td>
-            <td class="cell-win">{{ s.goals_for }}</td>
-            <td class="cell-lose">{{ s.goals_against }}</td>
-            <td class="{% if s.goals_diff>0 %}cell-win{% elif s.goals_diff<0 %}cell-lose{% else %}cell-draw{% endif %}">
-              {{ '+' if s.goals_diff > 0 else '' }}{{ s.goals_diff }}
-            </td>
-            <td style="font-family:'Bebas Neue';font-size:18px;">{{ s.points }}</td>
-            <td><span style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;color:var(--accent);">{{ '%.2f'|format(s.goals_for_per_match) }}</span></td>
-            <td><span style="font-family:'Barlow Condensed';font-size:16px;font-weight:700;color:var(--accent3);">{{ '%.2f'|format(s.goals_against_per_match) }}</span></td>
-            <td>
-              <div style="display:flex;align-items:center;gap:6px;">
-                <div style="width:40px;height:5px;border-radius:3px;background:var(--border);overflow:hidden;">
-                  <div style="height:100%;width:{{ s.win_rate|int }}%;background:var(--accent);"></div>
-                </div>
-                <span style="font-size:11px;color:var(--muted);">{{ '%.0f'|format(s.win_rate) }}%</span>
-              </div>
-            </td>
-            <td style="font-size:11px;color:var(--muted);">{{ s.season_id }}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="15" style="text-align:center;color:var(--muted);padding:40px;">Aguardando dados...</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">👤 Players Ativos</h1>
+  <span class="badge badge-green" style="font-size:1rem; padding:.4rem .9rem;">{{ total }} players</span>
 </div>
+
+<div class="card mb-2">
+  <input type="search" id="search-player" placeholder="🔍 Buscar player..." style="width:100%; max-width:360px;">
+</div>
+
+<div class="tbl-wrap">
+  <table id="players-table">
+    <thead>
+      <tr>
+        <th class="tc">#</th>
+        <th>Nickname</th>
+        <th class="tc">ID</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in players %}
+      <tr>
+        <td class="tc text-muted">{{ loop.index }}</td>
+        <td style="font-weight:600; font-size:.95rem;">{{ p.nickname or '—' }}</td>
+        <td class="tc text-muted" style="font-size:.8rem; font-family:monospace;">{{ p.player_id }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="3" style="text-align:center; padding:2rem; color:var(--muted);">
+          Nenhum player registrado ainda.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  document.getElementById('search-player').addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    document.querySelectorAll('#players-table tbody tr').forEach(function(row) {
+      const nick = row.cells[1] ? row.cells[1].textContent.toLowerCase() : '';
+      row.style.display = nick.includes(q) ? '' : 'none';
+    });
+  });
+</script>
 {% endblock %}

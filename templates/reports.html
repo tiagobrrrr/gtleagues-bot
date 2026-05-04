@@ -1,82 +1,91 @@
 {% extends "layout.html" %}
 {% block title %}Relatórios — GT Scout{% endblock %}
+
 {% block content %}
-<div class="container">
-  <div class="page-header">
-    <div class="page-header-left">
-      <div class="page-title">Relatórios</div>
-      <div class="page-subtitle">Destaques e rankings</div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
-      <button onclick="sendEmailNow()" class="btn btn-primary" id="btn-email">📧 Enviar Email Agora</button>
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">📋 Relatórios</h1>
+  <a href="/download/excel/reports" class="btn btn-green">⬇ Baixar Planilha de Partidas</a>
+</div>
+
+<!-- Resumo geral -->
+<div class="grid-4 mb-2">
+  <div class="stat-box">
+    <div class="value">{{ summary.total }}</div>
+    <div class="label">Partidas Coletadas</div>
+  </div>
+  <div class="stat-box">
+    <div class="value">{{ summary.today }}</div>
+    <div class="label">Partidas Hoje</div>
+  </div>
+  <div class="stat-box">
+    <div class="value">{{ summary.seasons|length }}</div>
+    <div class="label">Temporadas</div>
+  </div>
+  <div class="stat-box">
+    <div class="value">{{ top_scorers|length }}</div>
+    <div class="label">Top Scorers</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-2">
+  <!-- Top 10 por Média GF -->
+  <div class="card">
+    <h2 class="section-title">🥇 Top 10 — Maior Média de Gols Feitos</h2>
+    <div class="tbl-wrap" style="border:none;">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Player</th>
+            <th class="tc">PJ</th>
+            <th class="tc">GF</th>
+            <th class="tc">Méd. GF/P</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in top_scorers %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td style="font-weight:600;">{{ s.nickname }}</td>
+            <td class="tc">{{ s.games_played }}</td>
+            <td class="tc text-green">{{ s.goals_for }}</td>
+            <td class="tc"><span class="badge badge-green">{{ "%.2f"|format(s.avg_goals_scored) }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:20px;">
-    <div class="card-header"><span class="card-title">📈 Resumo Geral</span></div>
-    <div class="card-body">
-      <div class="stats-grid">
-        <div class="stat-box green"><div class="stat-value">{{ summary.total }}</div><div class="stat-label">Partidas Coletadas</div></div>
-        <div class="stat-box blue"><div class="stat-value">{{ summary.today }}</div><div class="stat-label">Hoje</div></div>
-        <div class="stat-box yellow"><div class="stat-value">{{ summary.seasons|length }}</div><div class="stat-label">Temporadas</div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-header"><span class="card-title">🥇 Top 10 — Maior Média de Gols</span></div>
-      <div class="card-body" style="padding:0;">
-        {% for s in top_scorers %}
-        <div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">
-          <span class="rank {% if loop.index<=3 %}top{% endif %}">{{ loop.index }}</span>
-          <div style="flex:1;">
-            <div style="font-weight:700;">{{ s.nickname }}</div>
-            <div style="font-size:11px;color:var(--muted);">{{ s.games_played }} partidas · {{ s.goals_for }} gols</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-family:'Bebas Neue';font-size:26px;color:var(--accent);">{{ s.avg_goals_scored }}</div>
-            <div style="font-size:10px;color:var(--muted);letter-spacing:1px;">GF/PARTIDA</div>
-          </div>
-        </div>
-        {% else %}<div style="padding:30px;text-align:center;color:var(--muted);">Sem dados.</div>{% endfor %}
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">🎮 Top 10 — Mais Partidas Jogadas</span></div>
-      <div class="card-body" style="padding:0;">
-        {% for s in most_games %}
-        <div style="display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--border);">
-          <span class="rank {% if loop.index<=3 %}top{% endif %}">{{ loop.index }}</span>
-          <div style="flex:1;">
-            <div style="font-weight:700;">{{ s.nickname }}</div>
-            <div style="font-size:11px;color:var(--muted);">{{ s.goals_for }} gols marcados</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-family:'Bebas Neue';font-size:26px;color:var(--accent2);">{{ s.games_played }}</div>
-            <div style="font-size:10px;color:var(--muted);letter-spacing:1px;">PARTIDAS</div>
-          </div>
-        </div>
-        {% else %}<div style="padding:30px;text-align:center;color:var(--muted);">Sem dados.</div>{% endfor %}
-      </div>
+  <!-- Top 10 por Partidas Jogadas -->
+  <div class="card">
+    <h2 class="section-title">🎮 Top 10 — Mais Partidas Jogadas</h2>
+    <div class="tbl-wrap" style="border:none;">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Player</th>
+            <th class="tc">PJ</th>
+            <th class="tc">V</th>
+            <th class="tc">E</th>
+            <th class="tc">D</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in most_games %}
+          <tr>
+            <td class="text-muted">{{ loop.index }}</td>
+            <td style="font-weight:600;">{{ s.nickname }}</td>
+            <td class="tc" style="font-weight:700;">{{ s.games_played }}</td>
+            <td class="tc text-green">{{ s.wins }}</td>
+            <td class="tc text-yellow">{{ s.draws }}</td>
+            <td class="tc text-red">{{ s.losses }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
-{% endblock %}
-{% block scripts %}
-<script>
-function sendEmailNow(){
-  const btn = document.getElementById('btn-email');
-  btn.textContent = '⏳ Enviando...';
-  btn.disabled = true;
-  fetch('/api/send-email-now', {method:'POST'})
-    .then(r=>r.json())
-    .then(d=>{
-      btn.textContent = d.sent ? '✅ Email Enviado!' : '❌ Erro ao enviar';
-      setTimeout(()=>{btn.textContent='📧 Enviar Email Agora';btn.disabled=false;}, 4000);
-    })
-    .catch(()=>{btn.textContent='❌ Erro';btn.disabled=false;});
-}
-</script>
 {% endblock %}

@@ -1,116 +1,115 @@
 {% extends "layout.html" %}
 {% block title %}Partidas — GT Scout{% endblock %}
-{% block content %}
-<div class="container">
-  <div class="page-header">
-    <div>
-      <div class="page-title">Partidas</div>
-      <div class="page-subtitle">Resultados coletados da GT Leagues</div>
-    </div>
-    <div class="btn-group">
-      <form method="get" style="display:flex;gap:8px;align-items:center;">
-        <select name="season" onchange="this.form.submit()">
-          <option value="">Todas as temporadas</option>
-          {% for s in seasons %}<option value="{{ s }}" {% if s==selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
-        </select>
-      </form>
-      <a href="/download/excel{% if selected %}?season={{ selected }}{% endif %}" class="btn btn-download">
-        ⬇ Download Excel
-      </a>
-      <button class="btn btn-email" onclick="sendEmailNow(this)">📧 Enviar Email Agora</button>
-    </div>
-  </div>
 
-  <div class="card">
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>#</th><th>Data</th><th>Casa</th>
-            <th style="text-align:center;">Placar</th>
-            <th>Visitante</th><th>Resultado</th><th>Temporada</th><th>Canal</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for m in pagination.items %}
-          {% set hs = m.home_score %}
-          {% set as_ = m.away_score %}
-          <tr>
-            <td style="color:var(--muted);font-size:11px;">W{{ m.week }}</td>
-            <td style="color:var(--muted);font-size:12px;">{{ m.kickoff[:16].replace('T',' ') if m.kickoff else '—' }}</td>
-            <td>
-              <div style="display:flex;align-items:center;gap:8px;">
-                {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
-                <div>
-                  <div style="font-weight:600;
-                    {% if hs is not none and as_ is not none %}
-                      {% if hs > as_ %}color:var(--accent);
-                      {% elif hs < as_ %}color:var(--accent3);
-                      {% else %}color:#f5c842;{% endif %}
-                    {% endif %}">{{ m.home_nickname }}</div>
-                  <div style="font-size:11px;color:var(--muted);">{{ m.home_team }}</div>
-                </div>
-              </div>
-            </td>
-            <td style="text-align:center;">
-              <span style="font-family:'Bebas Neue';font-size:20px;
-                color:{% if hs is not none and as_ is not none %}{% if hs>as_ %}var(--accent){% elif hs<as_ %}var(--accent3){% else %}#f5c842{% endif %}{% else %}var(--muted){% endif %}">
-                {{ hs if hs is not none else '—' }}
-              </span>
-              <span style="color:var(--muted);margin:0 4px;">×</span>
-              <span style="font-family:'Bebas Neue';font-size:20px;
-                color:{% if hs is not none and as_ is not none %}{% if as_>hs %}var(--accent){% elif as_<hs %}var(--accent3){% else %}#f5c842{% endif %}{% else %}var(--muted){% endif %}">
-                {{ as_ if as_ is not none else '—' }}
-              </span>
-            </td>
-            <td>
-              <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
-                <div style="text-align:right;">
-                  <div style="font-weight:600;
-                    {% if hs is not none and as_ is not none %}
-                      {% if as_ > hs %}color:var(--accent);
-                      {% elif as_ < hs %}color:var(--accent3);
-                      {% else %}color:#f5c842;{% endif %}
-                    {% endif %}">{{ m.away_nickname }}</div>
-                  <div style="font-size:11px;color:var(--muted);">{{ m.away_team }}</div>
-                </div>
-                {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" style="width:20px;height:20px;object-fit:contain;" onerror="this.style.display='none'">{% endif %}
-              </div>
-            </td>
-            <td>
-              {% if hs is not none and as_ is not none %}
-                {% if hs > as_ %}
-                  <span class="badge badge-green">✓ {{ m.home_nickname }}</span>
-                {% elif hs < as_ %}
-                  <span class="badge badge-green">✓ {{ m.away_nickname }}</span>
-                {% else %}
-                  <span class="badge badge-yellow">Empate</span>
-                {% endif %}
-              {% else %}
-                <span class="badge badge-gray">—</span>
-              {% endif %}
-            </td>
-            <td style="font-size:11px;color:var(--muted);">{{ m.season_name }}</td>
-            <td><span class="badge badge-gray">{{ m.channel or '—' }}</span></td>
-          </tr>
-          {% else %}
-          <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">Nenhuma partida encontrada.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% if pagination.pages > 1 %}
-    <div style="padding:16px;">
-      <div class="pagination">
-        {% if pagination.has_prev %}<a href="?page={{ pagination.prev_num }}&season={{ selected }}">‹</a>{% endif %}
-        {% for p in pagination.iter_pages() %}
-          {% if p %}<a href="?page={{ p }}&season={{ selected }}" {% if p==pagination.page %}class="current"{% endif %}>{{ p }}</a>
-          {% else %}<span>…</span>{% endif %}
-        {% endfor %}
-        {% if pagination.has_next %}<a href="?page={{ pagination.next_num }}&season={{ selected }}">›</a>{% endif %}
-      </div>
-    </div>
-    {% endif %}
-  </div>
+{% block content %}
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">⚽ Partidas Coletadas</h1>
+  <a href="/download/excel/reports" class="btn btn-green">⬇ Baixar Planilha</a>
 </div>
+
+<!-- Filtros -->
+<div class="card mb-2">
+  <form method="get" action="/matches" class="flex gap-2 items-center" style="flex-wrap:wrap;">
+    <label class="text-muted text-sm">Temporada:</label>
+    <select name="season">
+      <option value="">Todas</option>
+      {% for s in seasons %}
+      <option value="{{ s }}" {% if s == selected %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-blue">Filtrar</button>
+    {% if selected %}
+    <a href="/matches" class="btn btn-gray">Limpar</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Data</th>
+        <th class="tc">Sem.</th>
+        <th>Temporada</th>
+        <th class="tc">Player Casa</th>
+        <th class="tc">Placar</th>
+        <th class="tc">Player Visitante</th>
+        <th>Resultado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in pagination.items %}
+      {% set hs = m.home_score %}
+      {% set as_ = m.away_score %}
+      <tr>
+        <td class="text-muted" style="font-size:.8rem;">{{ pagination.page * 30 - 30 + loop.index }}</td>
+        <td style="font-size:.85rem; white-space:nowrap;">
+          {{ (m.kickoff or '')[:16]|replace('T',' ') }}
+        </td>
+        <td class="tc text-muted">{{ m.week or '—' }}</td>
+        <td class="text-muted" style="font-size:.8rem;">{{ m.season_name or '—' }}</td>
+        <td class="tc" style="font-weight:600;
+          color:{% if hs is not none and as_ is not none %}{% if hs > as_ %}var(--green){% elif hs < as_ %}var(--red){% else %}var(--yellow){% endif %}{% endif %};">
+          {{ m.home_nickname or '—' }}
+        </td>
+        <td class="tc" style="font-weight:700; font-size:1.05rem;">
+          {% if hs is not none and as_ is not none %}
+            {{ hs }} × {{ as_ }}
+          {% else %}
+            — × —
+          {% endif %}
+        </td>
+        <td class="tc" style="font-weight:600;
+          color:{% if hs is not none and as_ is not none %}{% if as_ > hs %}var(--green){% elif as_ < hs %}var(--red){% else %}var(--yellow){% endif %}{% endif %};">
+          {{ m.away_nickname or '—' }}
+        </td>
+        <td>
+          {% if hs is not none and as_ is not none %}
+            {% if hs > as_ %}
+              <span class="badge badge-green">{{ m.home_nickname }} venceu</span>
+            {% elif as_ > hs %}
+              <span class="badge badge-green">{{ m.away_nickname }} venceu</span>
+            {% else %}
+              <span class="badge badge-yellow">Empate</span>
+            {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8" style="text-align:center; padding:2rem; color:var(--muted);">
+          Nenhuma partida encontrada.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Paginação -->
+{% if pagination.pages > 1 %}
+<div class="pagination mt-1">
+  {% if pagination.has_prev %}
+    <a href="?page={{ pagination.prev_num }}{% if selected %}&season={{ selected }}{% endif %}">← Ant.</a>
+  {% endif %}
+  {% for p in pagination.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=2) %}
+    {% if p %}
+      {% if p == pagination.page %}
+        <span class="current">{{ p }}</span>
+      {% else %}
+        <a href="?page={{ p }}{% if selected %}&season={{ selected }}{% endif %}">{{ p }}</a>
+      {% endif %}
+    {% else %}
+      <span>…</span>
+    {% endif %}
+  {% endfor %}
+  {% if pagination.has_next %}
+    <a href="?page={{ pagination.next_num }}{% if selected %}&season={{ selected }}{% endif %}">Próx. →</a>
+  {% endif %}
+</div>
+<p class="text-muted text-sm mt-1">
+  {{ pagination.total }} partida(s) · página {{ pagination.page }}/{{ pagination.pages }}
+</p>
+{% endif %}
 {% endblock %}

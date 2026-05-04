@@ -1,109 +1,88 @@
 {% extends "layout.html" %}
-{% block title %}Dashboard — GT Scout
-{% block scripts %}
-<script>
-function atualizarDataHora() {
-  const agora = new Date();
-  const dia  = String(agora.getDate()).padStart(2,'0');
-  const mes  = String(agora.getMonth()+1).padStart(2,'0');
-  const ano  = agora.getFullYear();
-  const h    = String(agora.getHours()).padStart(2,'0');
-  const m    = String(agora.getMinutes()).padStart(2,'0');
-  const s    = String(agora.getSeconds()).padStart(2,'0');
-  const el   = document.getElementById('data-hora');
-  if (el) el.textContent = `${dia}/${mes}/${ano} ÀS ${h}:${m}:${s}`;
-}
-atualizarDataHora();
-setInterval(atualizarDataHora, 1000);
-</script>
-{% endblock %}
-{% endblock %}
+{% block title %}Dashboard — GT Scout{% endblock %}
+
 {% block content %}
-<div class="container">
-  <div class="page-header">
-    <div class="page-header-left">
-      <div class="page-title">Dashboard</div>
-      <div class="page-subtitle">GT LEAGUES · <span id="data-hora">--/--/---- ÀS --:--:--</span></div>
-    </div>
-    <a href="/download/excel" class="btn btn-excel">⬇ Baixar Planilha Excel</a>
-  </div>
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">🏆 GT Scout Dashboard</h1>
+  <span class="text-muted text-sm">{{ now.strftime('%d/%m/%Y %H:%M') }}</span>
+</div>
 
-  <div class="stats-grid">
-    <div class="stat-box green">
-      <div class="stat-value" id="total-counter">{{ summary.total }}</div>
-      <div class="stat-label">Partidas Coletadas</div>
-    </div>
-    <div class="stat-box blue">
-      <div class="stat-value">{{ summary.today }}</div>
-      <div class="stat-label">Partidas Hoje</div>
-    </div>
-    <div class="stat-box yellow">
-      <div class="stat-value">{{ summary.seasons|length }}</div>
-      <div class="stat-label">Temporadas</div>
-    </div>
-    <div class="stat-box red">
-      <div class="stat-value">{{ summary.total_all }}</div>
-      <div class="stat-label">Total no Banco</div>
-    </div>
+<!-- Cards de resumo -->
+<div class="grid-4 mb-2">
+  <div class="stat-box">
+    <div class="value">{{ summary.total }}</div>
+    <div class="label">Partidas Coletadas</div>
   </div>
-
-  <!-- LEGENDA -->
-  <div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap;">
-    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
-      <div style="width:12px;height:12px;border-radius:2px;background:#1DB954;opacity:.8;"></div>
-      <span style="color:var(--muted);">Vencedor</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
-      <div style="width:12px;height:12px;border-radius:2px;background:#E53935;opacity:.8;"></div>
-      <span style="color:var(--muted);">Perdedor</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
-      <div style="width:12px;height:12px;border-radius:2px;background:#FDD835;opacity:.8;"></div>
-      <span style="color:var(--muted);">Empate</span>
-    </div>
+  <div class="stat-box">
+    <div class="value">{{ summary.today }}</div>
+    <div class="label">Partidas Hoje</div>
   </div>
+  <div class="stat-box">
+    <div class="value">{{ summary.total_all }}</div>
+    <div class="label">Total no Banco</div>
+  </div>
+  <div class="stat-box">
+    <div class="value">{{ summary.seasons|length }}</div>
+    <div class="label">Temporadas</div>
+  </div>
+</div>
 
-  <div class="card">
-    <div class="card-header">
-      <span class="card-title">⚽ Últimas Partidas</span>
-      <a href="/matches" class="btn btn-ghost" style="font-size:11px;">Ver todas →</a>
-    </div>
-    <div class="card-body" style="padding:10px;">
+<!-- Atalhos -->
+<div class="flex gap-1 mb-2" style="flex-wrap:wrap;">
+  <a href="/scheduled"    class="btn btn-blue">📅 Agendadas</a>
+  <a href="/statistics"   class="btn btn-blue">📊 Estatísticas</a>
+  <a href="/head-to-head" class="btn btn-blue">⚔️ Confrontos</a>
+  <a href="/charts"       class="btn btn-blue">📈 Gráficos</a>
+  <a href="/download/excel/reports" class="btn btn-green">⬇ Planilha de Partidas</a>
+</div>
+
+<!-- Partidas recentes -->
+<h2 class="section-title">Últimas Partidas</h2>
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th class="tc">Player Casa</th>
+        <th class="tc">Placar</th>
+        <th class="tc">Player Visitante</th>
+        <th>Resultado</th>
+      </tr>
+    </thead>
+    <tbody>
       {% for m in recent %}
       {% set hs = m.home_score %}
       {% set as_ = m.away_score %}
-      {% if hs > as_ %}
-        {% set h_cls = 'cell-win' %}{% set a_cls = 'cell-lose' %}
-      {% elif hs < as_ %}
-        {% set h_cls = 'cell-lose' %}{% set a_cls = 'cell-win' %}
-      {% else %}
-        {% set h_cls = 'cell-draw' %}{% set a_cls = 'cell-draw' %}
-      {% endif %}
-      <div class="match-card" style="margin-bottom:7px;">
-        <div style="flex:1;">
-          {% if m.home_team_crest %}<img src="{{ m.home_team_crest }}" class="team-crest" onerror="this.style.display='none'" style="margin-bottom:2px;">{% endif %}
-          <div class="player-name {{ h_cls }}" style="border-radius:3px;padding:1px 5px;display:inline-block;">{{ m.home_nickname }}</div>
-          <div class="player-team">{{ m.home_team }}</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;padding:0 12px;">
-          <span class="score-num {{ h_cls }}" style="border-radius:3px;padding:0 4px;">{{ hs }}</span>
-          <span class="score-sep">×</span>
-          <span class="score-num {{ a_cls }}" style="border-radius:3px;padding:0 4px;">{{ as_ }}</span>
-        </div>
-        <div style="flex:1;text-align:right;">
-          <div class="player-name {{ a_cls }}" style="border-radius:3px;padding:1px 5px;display:inline-block;">{{ m.away_nickname }}</div>
-          <div class="player-team">{{ m.away_team }}</div>
-          {% if m.away_team_crest %}<img src="{{ m.away_team_crest }}" class="team-crest" onerror="this.style.display='none'">{% endif %}
-        </div>
-        <div style="margin-left:12px;text-align:right;min-width:110px;">
-          <div style="font-size:11px;color:var(--muted);">{{ m.season_name }}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px;">{{ m.kickoff[:10] if m.kickoff else '' }}</div>
-        </div>
-      </div>
-      {% else %}
-      <p style="color:var(--muted);text-align:center;padding:40px;">Aguardando próxima varredura...</p>
+      <tr>
+        <td style="font-size:.85rem; white-space:nowrap; color:var(--muted);">
+          {{ (m.kickoff or '')[:16]|replace('T',' ') }}
+        </td>
+        <td class="tc" style="font-weight:600;
+          color:{% if hs is not none and as_ is not none %}{% if hs > as_ %}var(--green){% elif hs < as_ %}var(--red){% else %}var(--yellow){% endif %}{% endif %};">
+          {{ m.home_nickname or '—' }}
+        </td>
+        <td class="tc" style="font-weight:700; font-size:1.05rem;">
+          {{ hs }} × {{ as_ }}
+        </td>
+        <td class="tc" style="font-weight:600;
+          color:{% if hs is not none and as_ is not none %}{% if as_ > hs %}var(--green){% elif as_ < hs %}var(--red){% else %}var(--yellow){% endif %}{% endif %};">
+          {{ m.away_nickname or '—' }}
+        </td>
+        <td>
+          {% if hs > as_ %}
+            <span class="badge badge-green">{{ m.home_nickname }}</span>
+          {% elif as_ > hs %}
+            <span class="badge badge-green">{{ m.away_nickname }}</span>
+          {% else %}
+            <span class="badge badge-yellow">Empate</span>
+          {% endif %}
+        </td>
+      </tr>
       {% endfor %}
-    </div>
-  </div>
+    </tbody>
+  </table>
 </div>
+<p class="text-muted text-sm mt-1">
+  Varredura automática a cada 15 min. <a href="/matches" style="color:var(--blue);">Ver todas →</a>
+</p>
 {% endblock %}
