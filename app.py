@@ -8,6 +8,7 @@ import pytz
 from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor
 from sqlalchemy import func, or_, and_
 
 from models import db, Match, Player, PlayerStats
@@ -18,9 +19,11 @@ from excel_exporter import (
 )
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
-
 BR_TZ = pytz.timezone("America/Sao_Paulo")
 
 
@@ -34,27 +37,34 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 # ── Banco ──────────────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
-DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
-DB_URL = DB_URL.replace("postgresql+psycopg+psycopg://", "postgresql+psycopg://")
+if "postgresql://" in DB_URL and "postgresql+psycopg://" not in DB_URL:
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 300}
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle":  300,
+}
 
 db.init_app(app)
 with app.app_context():
     db.create_all()
-    logger.info("Tabelas criadas/verificadas.")
-
-INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
+    logger.info("Tabelas OK.")
 
 # ── Scheduler ──────────────────────────────────────────────────
-scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
+INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
+
+executors = {"default": ThreadPoolExecutor(2)}
+scheduler = BackgroundScheduler(executors=executors, timezone="America/Sao_Paulo")
 
 
 def scraper_job():
     with app.app_context():
-        run_scraper()
+        try:
+            run_scraper()
+        except Exception as e:
+            logger.error(f"scraper_job ERRO: {e}")
 
 
 def weekly_email_job():
@@ -66,31 +76,31 @@ def weekly_email_job():
         logger.info(f"Email semanal {'enviado' if ok else 'FALHOU'}.")
 
 
+DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 weekly_day  = int(os.getenv("EMAIL_WEEKLY_DAY", 0))
 weekly_hour = int(os.getenv("EMAIL_WEEKLY_HOUR", 8))
-DAY_NAMES   = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
-scheduler.add_job(scraper_job, "interval", minutes=INTERVAL,
-                  id="gt_scraper", next_run_time=now_br())
-scheduler.add_job(weekly_email_job, "cron",
-                  day_of_week=DAY_NAMES[weekly_day],
-                  hour=weekly_hour, minute=0, id="weekly_email")
+scheduler.add_job(
+    scraper_job, "interval", minutes=INTERVAL,
+    id="gt_scraper", replace_existing=True,
+    next_run_time=now_br()          # roda imediatamente ao iniciar
+)
+scheduler.add_job(
+    weekly_email_job, "cron",
+    day_of_week=DAY_NAMES[weekly_day],
+    hour=weekly_hour, minute=0,
+    id="weekly_email", replace_existing=True
+)
 scheduler.start()
-
-logger.info("Executando varredura inicial...")
-try:
-    with app.app_context():
-        run_scraper()
-except Exception as e:
-    logger.error(f"Erro na varredura inicial: {e}")
+logger.info(f"Scheduler iniciado. Intervalo: {INTERVAL} min.")
 
 
 # ── Helpers ────────────────────────────────────────────────────
 def get_summary():
-    total = Match.query.filter(Match.home_score.isnot(None)).count()
+    total     = Match.query.filter(Match.home_score.isnot(None)).count()
     total_all = Match.query.count()
-    today = now_br().strftime("%Y-%m-%d")
-    today_ct = Match.query.filter(
+    today     = now_br().strftime("%Y-%m-%d")
+    today_ct  = Match.query.filter(
         Match.home_score.isnot(None),
         Match.kickoff.like(f"{today}%")
     ).count()
@@ -99,7 +109,6 @@ def get_summary():
 
 
 def avg_goals_individual():
-    """Calcula estatísticas individuais direto das partidas coletadas."""
     rows_home = db.session.query(
         Match.home_player_id, Match.home_nickname,
         func.count(Match.id),
@@ -125,21 +134,13 @@ def avg_goals_individual():
     agg = {}
     for pid, nick, gp, gf, ga, w, d, l in rows_home:
         agg.setdefault(pid, {"nickname": nick, "gp": 0, "gf": 0, "ga": 0, "w": 0, "d": 0, "l": 0})
-        agg[pid]["gp"] += gp or 0
-        agg[pid]["gf"] += gf or 0
-        agg[pid]["ga"] += ga or 0
-        agg[pid]["w"]  += w  or 0
-        agg[pid]["d"]  += d  or 0
-        agg[pid]["l"]  += l  or 0
+        agg[pid]["gp"] += gp or 0; agg[pid]["gf"] += gf or 0; agg[pid]["ga"] += ga or 0
+        agg[pid]["w"]  += w  or 0; agg[pid]["d"]  += d  or 0; agg[pid]["l"]  += l  or 0
 
     for pid, nick, gp, gf, ga, w, d, l in rows_away:
         agg.setdefault(pid, {"nickname": nick, "gp": 0, "gf": 0, "ga": 0, "w": 0, "d": 0, "l": 0})
-        agg[pid]["gp"] += gp or 0
-        agg[pid]["gf"] += gf or 0
-        agg[pid]["ga"] += ga or 0
-        agg[pid]["w"]  += w  or 0
-        agg[pid]["d"]  += d  or 0
-        agg[pid]["l"]  += l  or 0
+        agg[pid]["gp"] += gp or 0; agg[pid]["gf"] += gf or 0; agg[pid]["ga"] += ga or 0
+        agg[pid]["w"]  += w  or 0; agg[pid]["d"]  += d  or 0; agg[pid]["l"]  += l  or 0
 
     result = []
     for pid, d in agg.items():
@@ -179,10 +180,8 @@ def h2h_stats(p1_nick, p2_nick):
         else:
             s1, s2 = m.away_score, m.home_score
 
-        p1["gf"] += s1 or 0
-        p1["ga"] += s2 or 0
-        p2["gf"] += s2 or 0
-        p2["ga"] += s1 or 0
+        p1["gf"] += s1 or 0; p1["ga"] += s2 or 0
+        p2["gf"] += s2 or 0; p2["ga"] += s1 or 0
 
         if s1 > s2:
             p1["wins"] += 1; p2["losses"] += 1; winner = p1_nick
@@ -202,30 +201,26 @@ def h2h_stats(p1_nick, p2_nick):
 
     n = len(matches)
     for p in [p1, p2]:
-        p["n"]           = n
-        p["avg_scored"]  = round(p["gf"] / n, 2) if n else 0
-        p["avg_conceded"]= round(p["ga"] / n, 2) if n else 0
-        p["avg_total"]   = round((p["gf"] + p["ga"]) / n, 2) if n else 0
+        p["n"]            = n
+        p["avg_scored"]   = round(p["gf"] / n, 2) if n else 0
+        p["avg_conceded"] = round(p["ga"] / n, 2) if n else 0
+        p["avg_total"]    = round((p["gf"] + p["ga"]) / n, 2) if n else 0
 
     return {"total": n, "p1": p1, "p2": p2, "games": games}
 
 
 def get_scheduled_matches():
-    """Busca partidas agendadas de todas as seasons configuradas."""
     results = []
-    season_ids = get_season_ids()
-    for sid in season_ids:
-        raw_list = fetch_scheduled(sid)
-        for raw in raw_list:
+    for sid in get_season_ids():
+        for raw in fetch_scheduled(sid):
             p = parse_match(raw)
             if p:
                 results.append(p)
-    # Ordena por kickoff
     results.sort(key=lambda x: x.get("kickoff") or "")
     return results
 
 
-# ── Rotas principais ───────────────────────────────────────────
+# ── Rotas ──────────────────────────────────────────────────────
 @app.route("/")
 def index():
     summary = get_summary()
@@ -250,7 +245,6 @@ def matches():
 
 @app.route("/scheduled")
 def scheduled():
-    """Mostra partidas agendadas (não finalizadas)."""
     matches_list = get_scheduled_matches()
     return render_template("scheduled.html", matches=matches_list, now=now_br())
 
@@ -263,9 +257,8 @@ def statistics():
 
 @app.route("/players")
 def players():
-    all_players = (Player.query.order_by(Player.nickname).all())
-    total = len(all_players)
-    return render_template("players.html", players=all_players, total=total)
+    all_players = Player.query.order_by(Player.nickname).all()
+    return render_template("players.html", players=all_players, total=len(all_players))
 
 
 @app.route("/head-to-head")
@@ -286,31 +279,29 @@ def head_to_head():
 @app.route("/charts")
 def charts():
     stats = avg_goals_individual()
-    # Serializa para JSON seguro — evita erro de Jinja com objetos Python
-    stats_json = json.dumps(stats)
-    nicknames = [s["nickname"] for s in stats]
+    stats_json = json.dumps(stats, ensure_ascii=False)
+    nicknames  = [s["nickname"] for s in stats]
     return render_template("charts.html", stats=stats,
                            stats_json=stats_json, nicknames=nicknames)
 
 
 @app.route("/reports")
 def reports():
-    stats        = avg_goals_individual()
-    top_scorers  = stats[:10]
-    most_games   = sorted(stats, key=lambda x: x["games_played"], reverse=True)[:10]
+    stats       = avg_goals_individual()
+    top_scorers = stats[:10]
+    most_games  = sorted(stats, key=lambda x: x["games_played"], reverse=True)[:10]
     return render_template("reports.html", top_scorers=top_scorers,
                            most_games=most_games, summary=get_summary())
 
 
-# ── Downloads por contexto ─────────────────────────────────────
+# ── Downloads ──────────────────────────────────────────────────
 @app.route("/download/excel/reports")
 def download_excel_reports():
-    """Download planilha de partidas coletadas (aba relatórios)."""
     matches = (Match.query.filter(Match.home_score.isnot(None))
                .order_by(Match.kickoff.desc()).all())
     if not matches:
         return "Nenhuma partida coletada.", 404
-    xlsx = build_excel_reports(matches)
+    xlsx  = build_excel_reports(matches)
     fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -319,11 +310,10 @@ def download_excel_reports():
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
-    """Download planilha de estatísticas individuais."""
     stats = avg_goals_individual()
     if not stats:
-        return "Sem dados de estatísticas.", 404
-    xlsx = build_excel_stats(stats)
+        return "Sem dados.", 404
+    xlsx  = build_excel_stats(stats)
     fname = f"gtscout_estatisticas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -332,11 +322,10 @@ def download_excel_stats():
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
-    """Download planilha com dados dos gráficos."""
     stats = avg_goals_individual()
     if not stats:
         return "Sem dados.", 404
-    xlsx = build_excel_charts(stats)
+    xlsx  = build_excel_charts(stats)
     fname = f"gtscout_graficos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -345,27 +334,20 @@ def download_excel_charts():
 
 @app.route("/download/excel/h2h")
 def download_excel_h2h():
-    """Download planilha de confronto direto entre dois players."""
     p1 = request.args.get("p1", "")
     p2 = request.args.get("p2", "")
     if not p1 or not p2:
         return redirect(url_for("head_to_head"))
-
     result = h2h_stats(p1, p2)
     if not result["games"]:
         return "Nenhum confronto encontrado.", 404
-
-    xlsx = build_excel_h2h(
-        result["games"], p1, p2,
-        result["p1"], result["p2"]
-    )
+    xlsx  = build_excel_h2h(result["games"], p1, p2, result["p1"], result["p2"])
     fname = f"gtscout_h2h_{p1}_vs_{p2}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 
-# Compat com rota antiga
 @app.route("/download/excel")
 def download_excel():
     return redirect(url_for("download_excel_reports"))
@@ -374,19 +356,21 @@ def download_excel():
 # ── API ────────────────────────────────────────────────────────
 @app.route("/api/status")
 def api_status():
-    jobs = {job.id: str(job.next_run_time) for job in scheduler.get_jobs()}
+    jobs = {}
+    for job in scheduler.get_jobs():
+        jobs[job.id] = str(job.next_run_time)
     return jsonify({
-        "status": "ok",
-        "interval_minutes": INTERVAL,
+        "status":            "ok",
+        "interval_minutes":  INTERVAL,
         "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
-        "scheduler": jobs,
-        "last_scrape": get_last_diag(),
+        "total_matches":     Match.query.count(),
+        "scheduler_jobs":    jobs,
+        "last_scrape":       get_last_diag(),
     })
 
 
 @app.route("/api/stats")
 def api_stats():
-    """JSON com estatísticas individuais — usado pelo charts.js."""
     return jsonify(avg_goals_individual())
 
 
@@ -396,37 +380,17 @@ def known_ids():
     return jsonify({"ids": ids, "total": len(ids)})
 
 
-@app.route("/webhook/ingest", methods=["POST"])
-def webhook_ingest():
-    from web_scraper import parse_match, upsert_match, upsert_stats
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "JSON inválido"}), 400
-    key = os.getenv("WEBHOOK_KEY", "gtscout-webhook-2026")
-    if data.get("key") != key:
-        return jsonify({"error": "Chave inválida"}), 403
-
-    fixtures  = data.get("fixtures", [])
-    standings = data.get("standings", [])
-    new_ct = upd_ct = play_ct = 0
-
-    for raw in fixtures:
-        parsed = parse_match(raw)
-        if parsed:
-            if upsert_match(parsed): new_ct += 1
-            else: upd_ct += 1
-
-    for raw_p in standings:
-        season_id = raw_p.pop("_season_id", "unknown")
-        upsert_stats(raw_p, season_id)
-        play_ct += 1
-
+# ── Trigger manual (para testar sem esperar 15 min) ───────────
+@app.route("/trigger", methods=["GET", "POST"])
+def trigger_scraper():
+    """Dispara a varredura imediatamente (para testes)."""
+    logger.info("Varredura disparada manualmente via /trigger")
     try:
-        db.session.commit()
-        return jsonify({"ok": True, "new": new_ct, "updated": upd_ct, "players": play_ct})
+        run_scraper()
+        diag = get_last_diag()
+        return jsonify({"ok": True, "result": diag})
     except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/send-email", methods=["POST"])
@@ -437,30 +401,58 @@ def send_email_now():
     return jsonify({"ok": ok, "matches": len(matches)})
 
 
+@app.route("/webhook/ingest", methods=["POST"])
+def webhook_ingest():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON invalido"}), 400
+    key = os.getenv("WEBHOOK_KEY", "gtscout-webhook-2026")
+    if data.get("key") != key:
+        return jsonify({"error": "Chave invalida"}), 403
+
+    fixtures  = data.get("fixtures", [])
+    standings = data.get("standings", [])
+    new_ct = upd_ct = play_ct = 0
+
+    existing_ids = set(r[0] for r in db.session.query(Match.match_id).all())
+
+    for raw in fixtures:
+        mid = str(raw.get("id", ""))
+        if mid in existing_ids:
+            upd_ct += 1
+            continue
+        parsed = parse_match(raw)
+        if parsed:
+            db.session.add(Match(**parsed))
+            existing_ids.add(mid)
+            new_ct += 1
+
+    for raw_p in standings:
+        season_id = raw_p.pop("_season_id", "unknown")
+        from web_scraper import upsert_stats
+        upsert_stats(raw_p, season_id)
+        play_ct += 1
+
+    try:
+        db.session.commit()
+        return jsonify({"ok": True, "new": new_ct, "skipped": upd_ct, "players": play_ct})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/diagnostico")
 def diagnostico():
-    import requests as req
     diag  = get_last_diag()
     total = Match.query.count()
-    test_url = f"https://api.gtleagues.com/api/seasons/{os.getenv('GT_SEASON_IDS','').split(',')[0].strip()}/fixtures"
-    try:
-        r = req.get(test_url, timeout=10, headers={
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://www.gtleagues.com/"
-        })
-        api_test = {"url": test_url, "status": r.status_code,
-                    "bytes": len(r.content), "preview": r.text[:300]}
-    except Exception as e:
-        api_test = {"url": test_url, "error": str(e)}
-
+    jobs  = {j.id: str(j.next_run_time) for j in scheduler.get_jobs()}
     return jsonify({
-        "bot": "GT Scout",
-        "db_matches": total,
+        "bot":              "GT Scout",
+        "db_matches":       total,
         "interval_minutes": INTERVAL,
-        "last_scrape": diag,
-        "api_test": api_test,
-        "season_ids": os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
+        "scheduler_jobs":   jobs,
+        "last_scrape":      diag,
+        "season_ids":       os.getenv("GT_SEASON_IDS", "NAO CONFIGURADO"),
     })
 
 
