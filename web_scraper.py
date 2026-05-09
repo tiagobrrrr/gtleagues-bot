@@ -1,7 +1,7 @@
 """
 web_scraper.py — GT Scout Bot
-Playwright async abre Chrome real, resolve Cloudflare, extrai cf_clearance.
-curl_cffi usa esse cookie para todas as chamadas à API.
+Usa Playwright com --headless=new (modo stealth) para fazer as requisições
+diretamente na sessão autenticada do Cloudflare, sem precisar do cf_clearance.
 """
 
 import os
@@ -12,7 +12,6 @@ import logging
 from datetime import datetime, timedelta
 
 import pytz
-from curl_cffi import requests as cffi_requests
 
 from models import db, Match, Player, PlayerStats
 
@@ -20,19 +19,10 @@ logger  = logging.getLogger(__name__)
 BR_TZ   = pytz.timezone("America/Sao_Paulo")
 
 API_BASE = "https://api.gtleagues.com/api"
-TIMEOUT  = 30
 last_diag = {}
 
-# Caminho do Chromium — igual ao do build.sh
-BROWSERS_PATH = os.getenv(
-    "PLAYWRIGHT_BROWSERS_PATH",
-    "/opt/render/project/src/.browsers"
-)
+BROWSERS_PATH = "/opt/render/project/src/.browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
-
-# ── Estado global do cookie Cloudflare ────────────────────────
-_cf_state = {"cf_clearance": None, "expires": None}
-_cf_lock  = threading.Lock()
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -40,33 +30,38 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
+# Lock para garantir uma sessão Playwright por vez
+_pw_lock = threading.Lock()
 
-def _ensure_browser_installed():
-    """Instala o Chromium em runtime se não existir (fallback seguro)."""
+
+def _ensure_browser():
     import glob
     pattern = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell")
-    found   = glob.glob(pattern)
-    if not found:
-        logger.warning(f"[CF] Chromium não encontrado em {BROWSERS_PATH} — instalando...")
-        try:
-            env = os.environ.copy()
-            env["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
-            subprocess.run(
-                ["python", "-m", "playwright", "install", "chromium"],
-                env=env, check=True, timeout=300,
-                capture_output=True
-            )
-            logger.info("[CF] Chromium instalado com sucesso em runtime.")
-        except Exception as e:
-            logger.error(f"[CF] Falha ao instalar Chromium em runtime: {e}")
+    if not glob.glob(pattern):
+        logger.warning("[PW] Chromium não encontrado — instalando...")
+        env = os.environ.copy()
+        env["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
+        subprocess.run(
+            ["python", "-m", "playwright", "install", "chromium"],
+            env=env, check=True, timeout=300, capture_output=True
+        )
+        logger.info("[PW] Chromium instalado.")
     else:
-        logger.info(f"[CF] Chromium encontrado: {found[0]}")
+        logger.debug("[PW] Chromium OK.")
 
 
-# ── Playwright async ───────────────────────────────────────────
-async def _fetch_cf_cookie_async():
+async def _pw_fetch_json(url: str, params: dict = None) -> dict | list | None:
+    """
+    Abre o Playwright, visita gtleagues.com para autenticar no Cloudflare,
+    depois faz fetch() da URL da API dentro da mesma página (mesma sessão).
+    Retorna o JSON ou None.
+    """
     from playwright.async_api import async_playwright
-    logger.info("[CF] Abrindo Chromium para resolver Cloudflare...")
+
+    if params:
+        from urllib.parse import urlencode
+        url = f"{url}?{urlencode(params)}"
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -77,6 +72,7 @@ async def _fetch_cf_cookie_async():
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
                     "--window-size=1920,1080",
                 ],
             )
@@ -84,105 +80,84 @@ async def _fetch_cf_cookie_async():
                 viewport={"width": 1920, "height": 1080},
                 user_agent=USER_AGENT,
                 locale="pt-BR",
-                extra_http_headers={"accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8"},
+                extra_http_headers={
+                    "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+                },
             )
+            # Esconde sinais de automação
             await ctx.add_init_script("""
                 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
                 Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
-                Object.defineProperty(navigator,'languages',{get:()=>['pt-BR','pt','en-US']});
-                window.chrome={runtime:{}};
+                Object.defineProperty(navigator,'languages',{get:()=>['pt-BR','pt','en-US','en']});
+                window.chrome={runtime:{},loadTimes:()=>{},csi:()=>{},app:{}};
+                const orig = navigator.permissions.query.bind(navigator.permissions);
+                navigator.permissions.query = (p) =>
+                    p.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : orig(p);
             """)
-            page = await ctx.new_page()
-            await page.goto("https://www.gtleagues.com",
-                            wait_until="domcontentloaded", timeout=60000)
 
-            cf_value = None
-            for _ in range(30):
-                cookies = await ctx.cookies()
-                cf = next((c for c in cookies if c["name"] == "cf_clearance"), None)
-                if cf:
-                    cf_value = cf["value"]
-                    break
-                await asyncio.sleep(1)
+            page = await ctx.new_page()
+
+            # 1. Visita a página principal para passar pelo Cloudflare
+            logger.debug("[PW] Visitando gtleagues.com...")
+            await page.goto("https://www.gtleagues.com",
+                            wait_until="networkidle", timeout=60000)
+            await asyncio.sleep(2)
+
+            # 2. Faz o fetch da API dentro da mesma sessão (já autenticado no CF)
+            logger.debug(f"[PW] Fetching: {url}")
+            result = await page.evaluate(f"""async () => {{
+                try {{
+                    const r = await fetch("{url}", {{
+                        method: "GET",
+                        headers: {{
+                            "accept": "application/json, text/plain, */*",
+                            "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+                            "origin": "https://www.gtleagues.com",
+                            "referer": "https://www.gtleagues.com/",
+                        }},
+                        credentials: "include",
+                    }});
+                    if (!r.ok) return {{ __error__: r.status }};
+                    return await r.json();
+                }} catch(e) {{
+                    return {{ __error__: e.toString() }};
+                }}
+            }}""")
 
             await browser.close()
 
-        if cf_value:
-            logger.info("[CF] cf_clearance obtido com sucesso!")
-        else:
-            logger.warning("[CF] cf_clearance não encontrado.")
-        return cf_value
+            if isinstance(result, dict) and "__error__" in result:
+                logger.warning(f"[PW] Fetch error: {result['__error__']} — {url}")
+                return None
+
+            return result
 
     except Exception as e:
-        logger.error(f"[CF] Erro Playwright: {e}")
+        logger.error(f"[PW] Erro: {e}")
         return None
 
 
-def _refresh_cf_cookie():
-    _ensure_browser_installed()
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        cf_value = loop.run_until_complete(_fetch_cf_cookie_async())
-        loop.close()
-    except Exception as e:
-        logger.error(f"[CF] Erro asyncio: {e}")
-        cf_value = None
-
-    with _cf_lock:
-        _cf_state["cf_clearance"] = cf_value
-        _cf_state["expires"] = datetime.now() + (
-            timedelta(hours=4) if cf_value else timedelta(minutes=20)
-        )
+def _run_pw(url, params=None):
+    """Executa o Playwright numa thread isolada com lock."""
+    with _pw_lock:
+        _ensure_browser()
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(_pw_fetch_json(url, params))
+            loop.close()
+            return result
+        except Exception as e:
+            logger.error(f"[PW] Erro run: {e}")
+            return None
 
 
-def _ensure_cf_cookie():
-    with _cf_lock:
-        expires = _cf_state.get("expires")
-        needs   = expires is None or datetime.now() >= expires
-    if needs:
-        _refresh_cf_cookie()
-
-
-# ── HTTP ───────────────────────────────────────────────────────
 def _get(path, params=None):
-    _ensure_cf_cookie()
     url = f"{API_BASE}{path}"
-
-    with _cf_lock:
-        cf_val = _cf_state.get("cf_clearance")
-
-    headers = {
-        "accept":           "application/json, text/plain, */*",
-        "accept-language":  "pt-BR,pt;q=0.9,en-US;q=0.8",
-        "origin":           "https://www.gtleagues.com",
-        "referer":          "https://www.gtleagues.com/",
-        "user-agent":       USER_AGENT,
-        "sec-ch-ua":          '"Chromium";v="120","Google Chrome";v="120","Not-A.Brand";v="99"',
-        "sec-ch-ua-mobile":   "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest":     "empty",
-        "sec-fetch-mode":     "cors",
-        "sec-fetch-site":     "same-site",
-    }
-    cookies = {"cf_clearance": cf_val} if cf_val else {}
-
-    try:
-        resp = cffi_requests.get(
-            url, headers=headers, cookies=cookies,
-            params=params, timeout=TIMEOUT, impersonate="chrome120",
-        )
-        logger.debug(f"GET {url} → {resp.status_code}")
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code in (403, 503):
-            logger.warning(f"[CF] Bloqueado ({resp.status_code}) — renovando cookie")
-            with _cf_lock:
-                _cf_state["expires"] = None
-        logger.warning(f"HTTP {resp.status_code}: {url}")
-    except Exception as e:
-        logger.error(f"Erro GET {url}: {e}")
-    return None
+    logger.debug(f"GET {url}")
+    return _run_pw(url, params)
 
 
 # ── Seasons ────────────────────────────────────────────────────
@@ -368,7 +343,7 @@ def run_scraper():
     global last_diag
     now_str = datetime.now(BR_TZ).strftime("%d/%m/%Y %H:%M:%S")
     logger.info("=" * 55)
-    logger.info(f"[{now_str}] VARREDURA — Playwright + curl_cffi")
+    logger.info(f"[{now_str}] VARREDURA — Playwright fetch in-page")
     logger.info("=" * 55)
 
     known_ids  = set(r[0] for r in db.session.query(Match.match_id).all())
@@ -395,15 +370,12 @@ def run_scraper():
 
     try:
         db.session.commit()
-        with _cf_lock:
-            cf_ok = "ok" if _cf_state.get("cf_clearance") else "ausente"
         last_diag = {
             "ts": now_str, "new": total_new, "skipped": total_skip,
             "players": total_play, "seasons": len(season_ids),
             "total_in_db": len(known_ids) + total_new,
-            "cf_cookie": cf_ok, "browsers_path": BROWSERS_PATH,
         }
-        logger.info(f"CONCLUÍDO | +{total_new} novas | {total_skip} já existiam | cf={cf_ok}")
+        logger.info(f"CONCLUÍDO | +{total_new} novas | {total_skip} já existiam")
     except Exception as e:
         db.session.rollback()
         last_diag = {"error": str(e), "ts": now_str}
