@@ -1,23 +1,16 @@
 """
 web_scraper.py — GT Scout Bot
-Usa curl_cffi para impersonar o Chrome no nível do TLS,
-bypassando o Cloudflare sem ScraperAPI ou proxy externo.
+Usa Playwright para resolver o Cloudflare challenge e extrair cf_clearance.
+Depois usa curl_cffi com esse cookie para todas as requisições à API.
 """
 
 import os
+import time
 import logging
+import threading
 from datetime import datetime, timedelta
 
 import pytz
-
-try:
-    from curl_cffi import requests
-    IMPERSONATE = "chrome120"
-    logger_init = "curl_cffi (Chrome TLS impersonation)"
-except ImportError:
-    import requests
-    IMPERSONATE = None
-    logger_init = "requests padrão (curl_cffi não instalado)"
 
 from models import db, Match, Player, PlayerStats
 
@@ -29,53 +22,173 @@ TIMEOUT  = 30
 
 last_diag = {}
 
-HEADERS = {
-    "accept":           "application/json, text/plain, */*",
-    "accept-language":  "pt-BR,pt;q=0.9,en-US;q=0.8",
-    "origin":           "https://www.gtleagues.com",
-    "referer":          "https://www.gtleagues.com/",
-    "user-agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "sec-ch-ua":          '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile":   "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest":     "empty",
-    "sec-fetch-mode":     "cors",
-    "sec-fetch-site":     "same-site",
-}
+# ── Sessão global com cookies do Cloudflare ────────────────────
+_cf_cookies   = {}      # {"cf_clearance": "...", "user_agent": "..."}
+_cf_lock      = threading.Lock()
+_cf_expires   = None    # quando renovar (a cada 4h)
+
+
+def _need_cookie_refresh():
+    global _cf_expires
+    return _cf_expires is None or datetime.now() >= _cf_expires
+
+
+def _refresh_cf_cookies():
+    """
+    Abre o Chrome real via Playwright, visita gtleagues.com,
+    aguarda o Cloudflare liberar e extrai cf_clearance + user-agent.
+    """
+    global _cf_cookies, _cf_expires
+    logger.info("[CF] Iniciando Playwright para obter cf_clearance...")
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-infobars",
+                    "--window-size=1920,1080",
+                ]
+            )
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                locale="pt-BR",
+            )
+
+            # Esconde sinais de automação
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['pt-BR','pt','en-US']});
+                window.chrome = {runtime: {}};
+            """)
+
+            page = context.new_page()
+
+            # Visita o site principal para pegar o cookie
+            page.goto("https://www.gtleagues.com", wait_until="domcontentloaded", timeout=60000)
+
+            # Aguarda até 30s para o Cloudflare liberar
+            for _ in range(30):
+                cookies = context.cookies()
+                cf = next((c for c in cookies if c["name"] == "cf_clearance"), None)
+                if cf:
+                    break
+                time.sleep(1)
+
+            cookies = context.cookies()
+            cf = next((c for c in cookies if c["name"] == "cf_clearance"), None)
+            ua = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+
+            browser.close()
+
+        with _cf_lock:
+            if cf:
+                _cf_cookies = {
+                    "cf_clearance": cf["value"],
+                    "user_agent":   ua,
+                }
+                _cf_expires = datetime.now() + timedelta(hours=4)
+                logger.info(f"[CF] cf_clearance obtido com sucesso. Válido por 4h.")
+            else:
+                logger.warning("[CF] cf_clearance não encontrado — API pode falhar.")
+                _cf_cookies = {"user_agent": ua}
+                _cf_expires = datetime.now() + timedelta(minutes=30)
+
+    except Exception as e:
+        logger.error(f"[CF] Erro no Playwright: {e}")
+        with _cf_lock:
+            _cf_expires = datetime.now() + timedelta(minutes=15)
+
+
+def _get_session():
+    """Retorna sessão curl_cffi com cookies válidos do Cloudflare."""
+    if _need_cookie_refresh():
+        _refresh_cf_cookies()
+
+    try:
+        from curl_cffi import requests as cffi_requests
+
+        session = cffi_requests.Session(impersonate="chrome120")
+        ua = _cf_cookies.get("user_agent", "Mozilla/5.0")
+        session.headers.update({
+            "accept":           "application/json, text/plain, */*",
+            "accept-language":  "pt-BR,pt;q=0.9,en-US;q=0.8",
+            "origin":           "https://www.gtleagues.com",
+            "referer":          "https://www.gtleagues.com/",
+            "user-agent":       ua,
+            "sec-ch-ua":          '"Chromium";v="120", "Google Chrome";v="120"',
+            "sec-ch-ua-mobile":   "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "sec-fetch-dest":     "empty",
+            "sec-fetch-mode":     "cors",
+            "sec-fetch-site":     "same-site",
+        })
+        if "cf_clearance" in _cf_cookies:
+            session.cookies.set("cf_clearance", _cf_cookies["cf_clearance"],
+                                domain=".gtleagues.com")
+        return session
+
+    except ImportError:
+        import requests
+        s = requests.Session()
+        ua = _cf_cookies.get("user_agent", "Mozilla/5.0")
+        s.headers.update({
+            "accept": "application/json",
+            "user-agent": ua,
+            "origin": "https://www.gtleagues.com",
+            "referer": "https://www.gtleagues.com/",
+        })
+        if "cf_clearance" in _cf_cookies:
+            s.cookies.set("cf_clearance", _cf_cookies["cf_clearance"])
+        return s
 
 
 def _get(path, params=None):
     url = f"{API_BASE}{path}"
     try:
-        if IMPERSONATE:
-            resp = requests.get(
-                url,
-                headers=HEADERS,
-                params=params,
-                timeout=TIMEOUT,
-                impersonate=IMPERSONATE,
-            )
-        else:
-            resp = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
+        session = _get_session()
+
+        try:
+            resp = session.get(url, params=params, timeout=TIMEOUT, impersonate="chrome120")
+        except TypeError:
+            resp = session.get(url, params=params, timeout=TIMEOUT)
 
         logger.debug(f"GET {url} → {resp.status_code}")
 
         if resp.status_code == 200:
             return resp.json()
 
-        logger.warning(f"HTTP {resp.status_code} em {url}: {resp.text[:300]}")
+        if resp.status_code in (403, 503):
+            logger.warning(f"[CF] Bloqueado ({resp.status_code}) — forçando renovação do cookie")
+            global _cf_expires
+            _cf_expires = None   # força refresh na próxima chamada
+
+        logger.warning(f"HTTP {resp.status_code}: {url}")
+
     except Exception as e:
         logger.error(f"Erro GET {url}: {e}")
+
     return None
 
 
 # ── Seasons ────────────────────────────────────────────────────
 def get_season_ids():
-    """Lê GT_SEASON_IDS do .env (lista separada por vírgula)."""
     raw = os.getenv("GT_SEASON_IDS", "").strip()
     if not raw:
         logger.error("GT_SEASON_IDS não configurado!")
@@ -84,45 +197,37 @@ def get_season_ids():
 
 
 def fetch_active_seasons():
-    """
-    Busca seasons ativas/recentes da API (últimos 60 dias).
-    Evita varrer todas as 143+ seasons a cada ciclo.
-    """
+    """Retorna apenas seasons ativas ou encerradas nos últimos 60 dias."""
     data = _get("/seasons", {"limit": 200, "offset": 0})
     if not data:
         return []
-
     items = data if isinstance(data, list) else data.get("data", [])
     if not isinstance(items, list):
         return []
 
     cutoff = datetime.now() - timedelta(days=60)
     active = []
-
     for s in items:
         sid = str(s.get("id", ""))
         if not sid:
             continue
         status   = s.get("status")
         end_date = s.get("endDate") or s.get("end_date") or ""
-
         if status in (1, "1", "active"):
             active.append(sid)
             continue
         if end_date:
             try:
-                ed = datetime.fromisoformat(end_date[:10])
-                if ed >= cutoff:
+                if datetime.fromisoformat(end_date[:10]) >= cutoff:
                     active.append(sid)
             except Exception:
                 active.append(sid)
 
-    logger.info(f"Seasons ativas/recentes: {len(active)}")
+    logger.info(f"Seasons ativas: {len(active)}")
     return active
 
 
 def get_seasons_to_scrape():
-    """Combina seasons do .env com seasons ativas da API."""
     env_ids  = set(get_season_ids())
     api_ids  = set(fetch_active_seasons())
     combined = (api_ids | env_ids) if api_ids else env_ids
@@ -130,9 +235,7 @@ def get_seasons_to_scrape():
     return list(combined)
 
 
-# ── Fixtures ───────────────────────────────────────────────────
 def fetch_fixtures(season_id):
-    """Retorna apenas partidas FINALIZADAS (status == 3)."""
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
         return []
@@ -143,7 +246,6 @@ def fetch_fixtures(season_id):
 
 
 def fetch_scheduled(season_id):
-    """Retorna partidas AGENDADAS/PENDENTES (status != 3)."""
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
         return []
@@ -154,7 +256,6 @@ def fetch_scheduled(season_id):
 
 
 def fetch_standings(season_id):
-    """Retorna a classificação da season."""
     data = _get(f"/seasons/{season_id}/standings", {"limit": 500, "offset": 0})
     if not data:
         return []
@@ -164,7 +265,6 @@ def fetch_standings(season_id):
 
 # ── Parse ──────────────────────────────────────────────────────
 def parse_match(raw):
-    """Converte raw JSON da API em dict pronto para o modelo Match."""
     try:
         result     = raw.get("result") or {}
         stats      = result.get("stats") or {}
@@ -226,9 +326,7 @@ def parse_match(raw):
         return None
 
 
-# ── Upsert ─────────────────────────────────────────────────────
 def upsert_match(parsed, known_ids: set) -> bool:
-    """Insere se não existir. Zero duplicatas via cache em memória."""
     mid = parsed["match_id"]
     if mid in known_ids:
         return False
@@ -238,7 +336,6 @@ def upsert_match(parsed, known_ids: set) -> bool:
 
 
 def upsert_stats(raw_p, season_id):
-    """Insere ou atualiza estatísticas de um player."""
     def _f(v):
         try: return float(v) if v is not None else 0.0
         except: return 0.0
@@ -250,12 +347,9 @@ def upsert_stats(raw_p, season_id):
     if not pid:
         return
     nickname = (raw_p.get("nickname") or "").strip()
-
     data = {
-        "player_id":               pid,
-        "season_id":               season_id,
-        "nickname":                nickname,
-        "team":                    raw_p.get("team", ""),
+        "player_id": pid, "season_id": season_id, "nickname": nickname,
+        "team": raw_p.get("team", ""),
         "games_played":            _i(raw_p.get("games_played")),
         "points":                  _i(raw_p.get("points")),
         "wins":                    _i(raw_p.get("wins")),
@@ -271,7 +365,6 @@ def upsert_stats(raw_p, season_id):
         "goals_against_per_match": _f(raw_p.get("goals_against_per_match")),
         "points_per_match":        _f(raw_p.get("points_per_match")),
     }
-
     ex = PlayerStats.query.filter_by(player_id=pid, season_id=season_id).first()
     if ex:
         for k, v in data.items():
@@ -285,24 +378,15 @@ def upsert_stats(raw_p, season_id):
 
 # ── Varredura principal ────────────────────────────────────────
 def run_scraper():
-    """
-    Varredura a cada 15 minutos:
-    1. Carrega known_ids do banco em memória (zero duplicatas)
-    2. Descobre seasons ativas (não varre as 143 de uma vez)
-    3. Coleta só partidas finalizadas novas
-    4. curl_cffi impersona Chrome TLS → bypassa Cloudflare
-    """
     global last_diag
     now_str = datetime.now(BR_TZ).strftime("%d/%m/%Y %H:%M:%S")
     logger.info("=" * 55)
-    logger.info(f"[{now_str}] VARREDURA GT SCOUT — {logger_init}")
+    logger.info(f"[{now_str}] VARREDURA GT SCOUT — Playwright + curl_cffi")
     logger.info("=" * 55)
 
-    # Cache de IDs já no banco
-    known_ids = set(r[0] for r in db.session.query(Match.match_id).all())
-    logger.info(f"IDs no banco: {len(known_ids)}")
-
+    known_ids  = set(r[0] for r in db.session.query(Match.match_id).all())
     season_ids = get_seasons_to_scrape()
+
     if not season_ids:
         last_diag = {"error": "Nenhuma season configurada", "ts": now_str}
         return
@@ -312,36 +396,27 @@ def run_scraper():
     for sid in season_ids:
         fixtures = fetch_fixtures(sid)
         new_ct   = 0
-
         for raw in fixtures:
             parsed = parse_match(raw)
             if parsed and upsert_match(parsed, known_ids):
                 new_ct += 1
-
         if new_ct > 0:
             logger.info(f"  Season {sid}: +{new_ct} novas")
             for raw_p in fetch_standings(sid):
                 upsert_stats(raw_p, sid)
                 total_play += 1
-
         total_new  += new_ct
         total_skip += len(fixtures) - new_ct
 
     try:
         db.session.commit()
         last_diag = {
-            "ts":          now_str,
-            "engine":      logger_init,
-            "new":         total_new,
-            "skipped":     total_skip,
-            "players":     total_play,
-            "seasons":     len(season_ids),
+            "ts": now_str, "new": total_new, "skipped": total_skip,
+            "players": total_play, "seasons": len(season_ids),
             "total_in_db": len(known_ids) + total_new,
+            "cf_cookie": "ok" if "cf_clearance" in _cf_cookies else "ausente",
         }
-        logger.info(
-            f"CONCLUÍDO | +{total_new} novas | {total_skip} já existiam | "
-            f"{len(season_ids)} seasons | engine: {logger_init}"
-        )
+        logger.info(f"CONCLUÍDO | +{total_new} novas | {total_skip} já existiam")
     except Exception as e:
         db.session.rollback()
         last_diag = {"error": str(e), "ts": now_str}
