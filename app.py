@@ -34,8 +34,8 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 # ── Banco ──────────────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
-DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
-DB_URL = DB_URL.replace("postgresql+psycopg+psycopg://", "postgresql+psycopg://")
+if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -49,12 +49,9 @@ with app.app_context():
 INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
 
 # ── Scheduler ──────────────────────────────────────────────────
+# O scraper roda no coletor_local.py (IP residencial).
+# O servidor apenas agenda o e-mail semanal.
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
-
-
-def scraper_job():
-    with app.app_context():
-        run_scraper()
 
 
 def weekly_email_job():
@@ -70,27 +67,19 @@ weekly_day  = int(os.getenv("EMAIL_WEEKLY_DAY", 0))
 weekly_hour = int(os.getenv("EMAIL_WEEKLY_HOUR", 8))
 DAY_NAMES   = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
-scheduler.add_job(scraper_job, "interval", minutes=INTERVAL,
-                  id="gt_scraper", next_run_time=now_br())
 scheduler.add_job(weekly_email_job, "cron",
                   day_of_week=DAY_NAMES[weekly_day],
                   hour=weekly_hour, minute=0, id="weekly_email")
 scheduler.start()
-
-logger.info("Executando varredura inicial...")
-try:
-    with app.app_context():
-        run_scraper()
-except Exception as e:
-    logger.error(f"Erro na varredura inicial: {e}")
+logger.info(f"Scheduler iniciado. Coleta feita pelo coletor_local.py (a cada {INTERVAL} min).")
 
 
 # ── Helpers ────────────────────────────────────────────────────
 def get_summary():
-    total = Match.query.filter(Match.home_score.isnot(None)).count()
+    total     = Match.query.filter(Match.home_score.isnot(None)).count()
     total_all = Match.query.count()
-    today = now_br().strftime("%Y-%m-%d")
-    today_ct = Match.query.filter(
+    today     = now_br().strftime("%Y-%m-%d")
+    today_ct  = Match.query.filter(
         Match.home_score.isnot(None),
         Match.kickoff.like(f"{today}%")
     ).count()
@@ -99,7 +88,6 @@ def get_summary():
 
 
 def avg_goals_individual():
-    """Calcula estatísticas individuais direto das partidas coletadas."""
     rows_home = db.session.query(
         Match.home_player_id, Match.home_nickname,
         func.count(Match.id),
@@ -202,16 +190,15 @@ def h2h_stats(p1_nick, p2_nick):
 
     n = len(matches)
     for p in [p1, p2]:
-        p["n"]           = n
-        p["avg_scored"]  = round(p["gf"] / n, 2) if n else 0
-        p["avg_conceded"]= round(p["ga"] / n, 2) if n else 0
-        p["avg_total"]   = round((p["gf"] + p["ga"]) / n, 2) if n else 0
+        p["n"]            = n
+        p["avg_scored"]   = round(p["gf"] / n, 2) if n else 0
+        p["avg_conceded"] = round(p["ga"] / n, 2) if n else 0
+        p["avg_total"]    = round((p["gf"] + p["ga"]) / n, 2) if n else 0
 
     return {"total": n, "p1": p1, "p2": p2, "games": games}
 
 
 def get_scheduled_matches():
-    """Busca partidas agendadas de todas as seasons configuradas."""
     results = []
     season_ids = get_season_ids()
     for sid in season_ids:
@@ -220,7 +207,6 @@ def get_scheduled_matches():
             p = parse_match(raw)
             if p:
                 results.append(p)
-    # Ordena por kickoff
     results.sort(key=lambda x: x.get("kickoff") or "")
     return results
 
@@ -250,7 +236,6 @@ def matches():
 
 @app.route("/scheduled")
 def scheduled():
-    """Mostra partidas agendadas (não finalizadas)."""
     matches_list = get_scheduled_matches()
     return render_template("scheduled.html", matches=matches_list, now=now_br())
 
@@ -263,7 +248,7 @@ def statistics():
 
 @app.route("/players")
 def players():
-    all_players = (Player.query.order_by(Player.nickname).all())
+    all_players = Player.query.order_by(Player.nickname).all()
     total = len(all_players)
     return render_template("players.html", players=all_players, total=total)
 
@@ -285,19 +270,18 @@ def head_to_head():
 
 @app.route("/charts")
 def charts():
-    stats = avg_goals_individual()
-    # Serializa para JSON seguro — evita erro de Jinja com objetos Python
+    stats      = avg_goals_individual()
     stats_json = json.dumps(stats)
-    nicknames = [s["nickname"] for s in stats]
+    nicknames  = [s["nickname"] for s in stats]
     return render_template("charts.html", stats=stats,
                            stats_json=stats_json, nicknames=nicknames)
 
 
 @app.route("/reports")
 def reports():
-    stats        = avg_goals_individual()
-    top_scorers  = stats[:10]
-    most_games   = sorted(stats, key=lambda x: x["games_played"], reverse=True)[:10]
+    stats       = avg_goals_individual()
+    top_scorers = stats[:10]
+    most_games  = sorted(stats, key=lambda x: x["games_played"], reverse=True)[:10]
     return render_template("reports.html", top_scorers=top_scorers,
                            most_games=most_games, summary=get_summary())
 
@@ -305,12 +289,11 @@ def reports():
 # ── Downloads por contexto ─────────────────────────────────────
 @app.route("/download/excel/reports")
 def download_excel_reports():
-    """Download planilha de partidas coletadas (aba relatórios)."""
     matches = (Match.query.filter(Match.home_score.isnot(None))
                .order_by(Match.kickoff.desc()).all())
     if not matches:
         return "Nenhuma partida coletada.", 404
-    xlsx = build_excel_reports(matches)
+    xlsx  = build_excel_reports(matches)
     fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -319,11 +302,10 @@ def download_excel_reports():
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
-    """Download planilha de estatísticas individuais."""
     stats = avg_goals_individual()
     if not stats:
         return "Sem dados de estatísticas.", 404
-    xlsx = build_excel_stats(stats)
+    xlsx  = build_excel_stats(stats)
     fname = f"gtscout_estatisticas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -332,11 +314,10 @@ def download_excel_stats():
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
-    """Download planilha com dados dos gráficos."""
     stats = avg_goals_individual()
     if not stats:
         return "Sem dados.", 404
-    xlsx = build_excel_charts(stats)
+    xlsx  = build_excel_charts(stats)
     fname = f"gtscout_graficos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -345,27 +326,20 @@ def download_excel_charts():
 
 @app.route("/download/excel/h2h")
 def download_excel_h2h():
-    """Download planilha de confronto direto entre dois players."""
     p1 = request.args.get("p1", "")
     p2 = request.args.get("p2", "")
     if not p1 or not p2:
         return redirect(url_for("head_to_head"))
-
     result = h2h_stats(p1, p2)
     if not result["games"]:
         return "Nenhum confronto encontrado.", 404
-
-    xlsx = build_excel_h2h(
-        result["games"], p1, p2,
-        result["p1"], result["p2"]
-    )
+    xlsx  = build_excel_h2h(result["games"], p1, p2, result["p1"], result["p2"])
     fname = f"gtscout_h2h_{p1}_vs_{p2}.xlsx"
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 
-# Compat com rota antiga
 @app.route("/download/excel")
 def download_excel():
     return redirect(url_for("download_excel_reports"))
@@ -376,17 +350,17 @@ def download_excel():
 def api_status():
     jobs = {job.id: str(job.next_run_time) for job in scheduler.get_jobs()}
     return jsonify({
-        "status": "ok",
-        "interval_minutes": INTERVAL,
-        "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
-        "scheduler": jobs,
-        "last_scrape": get_last_diag(),
+        "status":             "ok",
+        "interval_minutes":   INTERVAL,
+        "coleta":             "coletor_local.py (IP residencial)",
+        "matches_finalized":  Match.query.filter(Match.home_score.isnot(None)).count(),
+        "scheduler":          jobs,
+        "last_scrape":        get_last_diag(),
     })
 
 
 @app.route("/api/stats")
 def api_stats():
-    """JSON com estatísticas individuais — usado pelo charts.js."""
     return jsonify(avg_goals_individual())
 
 
@@ -402,19 +376,25 @@ def webhook_ingest():
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "JSON inválido"}), 400
+
     key = os.getenv("WEBHOOK_KEY", "gtscout-webhook-2026")
     if data.get("key") != key:
         return jsonify({"error": "Chave inválida"}), 403
 
-    fixtures  = data.get("fixtures", [])
+    fixtures  = data.get("fixtures",  [])
     standings = data.get("standings", [])
-    new_ct = upd_ct = play_ct = 0
 
+    # Cache de IDs já no banco
+    known_ids_set = set(r[0] for r in db.session.query(Match.match_id).all())
+
+    new_ct = upd_ct = play_ct = 0
     for raw in fixtures:
         parsed = parse_match(raw)
         if parsed:
-            if upsert_match(parsed): new_ct += 1
-            else: upd_ct += 1
+            if upsert_match(parsed, known_ids_set):
+                new_ct += 1
+            else:
+                upd_ct += 1
 
     for raw_p in standings:
         season_id = raw_p.pop("_season_id", "unknown")
@@ -439,28 +419,14 @@ def send_email_now():
 
 @app.route("/diagnostico")
 def diagnostico():
-    import requests as req
-    diag  = get_last_diag()
     total = Match.query.count()
-    test_url = f"https://api.gtleagues.com/api/seasons/{os.getenv('GT_SEASON_IDS','').split(',')[0].strip()}/fixtures"
-    try:
-        r = req.get(test_url, timeout=10, headers={
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://www.gtleagues.com/"
-        })
-        api_test = {"url": test_url, "status": r.status_code,
-                    "bytes": len(r.content), "preview": r.text[:300]}
-    except Exception as e:
-        api_test = {"url": test_url, "error": str(e)}
-
     return jsonify({
-        "bot": "GT Scout",
-        "db_matches": total,
+        "bot":              "GT Scout",
+        "db_matches":       total,
         "interval_minutes": INTERVAL,
-        "last_scrape": diag,
-        "api_test": api_test,
-        "season_ids": os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
+        "coleta":           "coletor_local.py (IP residencial — roda no PC do usuario)",
+        "last_scrape":      get_last_diag(),
+        "season_ids":       os.getenv("GT_SEASON_IDS", "NAO CONFIGURADO"),
     })
 
 

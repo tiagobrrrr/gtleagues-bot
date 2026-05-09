@@ -1,211 +1,240 @@
 """
 coletor_local.py — GT Scout Bot
-Roda no SEU PC — IP residencial passa pelo Cloudflare.
-
-Modos:
-  python coletor_local.py              → só partidas novas (uso diário)
-  python coletor_local.py --full       → histórico completo
-  python coletor_local.py --descobre   → descobre e salva IDs em seasons_descobertos.txt
+Roda no seu PC (IP residencial) a cada 15 minutos.
+Coleta partidas finalizadas da GT Leagues API e envia ao servidor Render via webhook.
 """
 
-import requests, logging, sys, time, os
-from datetime import datetime
+import os
+import time
+import logging
+import requests
+from datetime import datetime, timedelta
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%d/%m/%Y %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
-RENDER_URL   = "https://gtleagues-bot.onrender.com"
-WEBHOOK_KEY  = "gtscout-webhook-2026"
-API_BASE     = "https://api.gtleagues.com/api"
-SEASONS_FILE = "seasons_descobertos.txt"
-BATCH_SIZE   = 30
+# ── Configurações ─────────────────────────────────────────────
+# Edite aqui ou crie um arquivo .env na mesma pasta
+SERVER_URL   = os.getenv("SERVER_URL",   "https://gtleagues-bot.onrender.com")
+WEBHOOK_KEY  = os.getenv("WEBHOOK_KEY",  "gtscout-webhook-2026")
+GT_SEASON_IDS = os.getenv("GT_SEASON_IDS", "19211")   # separados por vírgula
+INTERVAL_MIN = int(os.getenv("INTERVAL_MIN", "15"))
+
+API_BASE = "https://api.gtleagues.com/api"
+TIMEOUT  = 30
 
 HEADERS = {
-    "accept": "application/json",
-    "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "origin": "https://www.gtleagues.com",
-    "referer": "https://www.gtleagues.com/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-    "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
-    "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-site",
+    "accept":           "application/json, text/plain, */*",
+    "accept-language":  "pt-BR,pt;q=0.9,en-US;q=0.8",
+    "origin":           "https://www.gtleagues.com",
+    "referer":          "https://www.gtleagues.com/",
+    "user-agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "sec-ch-ua":          '"Chromium";v="124", "Google Chrome";v="124"',
+    "sec-ch-ua-mobile":   "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest":     "empty",
+    "sec-fetch-mode":     "cors",
+    "sec-fetch-site":     "same-site",
 }
 
-def fetch(url, params=None, silent=False):
+
+def _get(path, params=None):
+    url = f"{API_BASE}{path}"
     try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=20)
-        if r.status_code == 200: return r.json()
-        if not silent: logger.warning(f"  HTTP {r.status_code}: {url}")
-        return None
-    except Exception as e:
-        if not silent: logger.error(f"  Erro: {e}")
-        return None
-
-def salvar_seasons(ids):
-    with open(SEASONS_FILE, "w") as f:
-        f.write("\n".join(str(i) for i in sorted(ids, reverse=True)))
-    logger.info(f"  {len(ids)} IDs salvos em '{SEASONS_FILE}'")
-
-def carregar_seasons():
-    if not os.path.exists(SEASONS_FILE): return None
-    with open(SEASONS_FILE) as f:
-        ids = [int(l.strip()) for l in f if l.strip().isdigit()]
-    logger.info(f"  {len(ids)} season IDs carregados de '{SEASONS_FILE}'")
-    return ids
-
-def descobrir_seasons(id_min=18000, id_max=19600):
-    logger.info(f"Descobrindo seasons {id_min}→{id_max} (aguarde)...")
-    validos = []
-    for i, sid in enumerate(range(id_max, id_min - 1, -1)):
-        data = fetch(f"{API_BASE}/seasons/{sid}/standings", {"limit":1,"offset":0}, silent=True)
-        if data:
-            pl = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(pl, list) and pl:
-                validos.append(sid)
-                if len(validos) % 50 == 0:
-                    pct = round(((id_max - sid) / (id_max - id_min)) * 100)
-                    logger.info(f"  {len(validos)} encontrados | {pct}% | último: {sid}")
-        time.sleep(0.05)
-    logger.info(f"  Total: {len(validos)} seasons")
-    return sorted(validos, reverse=True)
-
-def coletar_season(sid):
-    fx, st = [], []
-    d = fetch(f"{API_BASE}/seasons/{sid}/fixtures", {"limit":1000,"offset":0})
-    if d:
-        items = d if isinstance(d, list) else d.get("data", [])
-        if isinstance(items, list):
-            fx = [f for f in items if isinstance(f, dict) and f.get("status") == 3]
-    d2 = fetch(f"{API_BASE}/seasons/{sid}/standings", {"limit":1000,"offset":0})
-    if d2:
-        pl = d2.get("data", d2) if isinstance(d2, dict) else d2
-        if isinstance(pl, list):
-            st = [{**p, "_season_id": sid} for p in pl]
-    return fx, st
-
-def wake_up():
-    try:
-        logger.info("Acordando o Render...")
-        r = requests.get(f"{RENDER_URL}/", timeout=60)
-        logger.info(f"  HTTP {r.status_code}")
-        if r.status_code == 200: time.sleep(3); return True
-    except Exception as e:
-        logger.warning(f"  {e}")
-    return False
-
-def get_known_ids():
-    try:
-        r = requests.get(f"{RENDER_URL}/api/known-ids", timeout=30)
+        r = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
         if r.status_code == 200:
-            ids = set(str(i) for i in r.json().get("ids", []))
-            logger.info(f"  Banco já tem {len(ids)} partidas.")
-            return ids
+            return r.json()
+        logger.warning(f"HTTP {r.status_code} → {url}")
     except Exception as e:
-        logger.warning(f"  {e}")
-    return set()
-
-def post_lote(fixtures, standings):
-    url = f"{RENDER_URL}/webhook/ingest"
-    payload = {"key": WEBHOOK_KEY, "fixtures": fixtures, "standings": standings}
-    for t in range(1, 4):
-        try:
-            r = requests.post(url, json=payload, timeout=90)
-            if r.status_code == 200: return r.json()
-            elif r.status_code in (502, 503, 504):
-                logger.warning(f"  HTTP {r.status_code}, aguardando {t*20}s...")
-                time.sleep(t * 20)
-            else:
-                logger.error(f"  HTTP {r.status_code}: {r.text[:100]}")
-                return None
-        except Exception as e:
-            logger.warning(f"  Tentativa {t}: {e}")
-            time.sleep(t * 10)
+        logger.error(f"Erro GET {url}: {e}")
     return None
 
-def enviar(fixtures, standings):
-    total_new = total_upd = total_play = 0
-    fix_lotes = [fixtures[i:i+BATCH_SIZE] for i in range(0, max(len(fixtures),1), BATCH_SIZE)]
-    std_lotes = [standings[i:i+BATCH_SIZE] for i in range(0, max(len(standings),1), BATCH_SIZE)]
-    n = max(len(fix_lotes), len(std_lotes))
-    for i in range(n):
-        lf = fix_lotes[i] if i < len(fix_lotes) else []
-        ls = std_lotes[i] if i < len(std_lotes) else []
-        logger.info(f"  Lote {i+1}/{n}: {len(lf)} partidas")
-        res = post_lote(lf, ls)
-        if res:
-            total_new  += res.get("new", 0)
-            total_upd  += res.get("updated", 0)
-            total_play += res.get("players", 0)
-            logger.info(f"    ✅ novas={res.get('new',0)} | total acum.={total_new}")
+
+def get_known_ids():
+    """Busca os match_ids já salvos no servidor para evitar reenvio."""
+    try:
+        r = requests.get(f"{SERVER_URL}/api/known-ids", timeout=15)
+        if r.status_code == 200:
+            return set(r.json().get("ids", []))
+    except Exception as e:
+        logger.error(f"Erro ao buscar known-ids: {e}")
+    return set()
+
+
+def fetch_fixtures_finalized(season_id):
+    """Busca partidas finalizadas (status == 3) de uma season."""
+    data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
+    if not data:
+        return []
+    items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
+    if not isinstance(items, list):
+        return []
+    done = [f for f in items if f.get("status") == 3]
+    logger.info(f"  Season {season_id}: {len(items)} total, {len(done)} finalizadas")
+    return done
+
+
+def fetch_standings(season_id):
+    """Busca a classificação de uma season."""
+    data = _get(f"/seasons/{season_id}/standings", {"limit": 500, "offset": 0})
+    if not data:
+        return []
+    items = data if isinstance(data, list) else data.get("data", [])
+    return items if isinstance(items, list) else []
+
+
+def fetch_active_seasons():
+    """Busca seasons ativas/recentes dos últimos 60 dias."""
+    data = _get("/seasons", {"limit": 200, "offset": 0})
+    if not data:
+        return []
+    items = data if isinstance(data, list) else data.get("data", [])
+    if not isinstance(items, list):
+        return []
+
+    cutoff = datetime.now() - timedelta(days=60)
+    active = []
+    for s in items:
+        sid    = str(s.get("id", ""))
+        if not sid:
+            continue
+        status   = s.get("status")
+        end_date = s.get("endDate") or s.get("end_date") or ""
+
+        if status in (1, "1", "active"):
+            active.append(sid)
+            continue
+        if end_date:
+            try:
+                ed = datetime.fromisoformat(end_date[:10])
+                if ed >= cutoff:
+                    active.append(sid)
+            except Exception:
+                active.append(sid)
+
+    logger.info(f"Seasons ativas/recentes da API: {len(active)}")
+    return active
+
+
+def get_seasons():
+    """Combina seasons do .env com seasons ativas da API."""
+    env_ids = set(s.strip() for s in GT_SEASON_IDS.split(",") if s.strip())
+    api_ids = set(fetch_active_seasons())
+    combined = (api_ids | env_ids) if api_ids else env_ids
+    logger.info(f"Total de seasons a varrer: {len(combined)}")
+    return list(combined)
+
+
+def send_to_server(fixtures, standings_by_season):
+    """Envia partidas e standings ao servidor via webhook."""
+    if not fixtures and not standings_by_season:
+        return True
+
+    # Flatten standings com season_id embutido
+    all_standings = []
+    for sid, rows in standings_by_season.items():
+        for row in rows:
+            row["_season_id"] = sid
+            all_standings.append(row)
+
+    payload = {
+        "key":       WEBHOOK_KEY,
+        "fixtures":  fixtures,
+        "standings": all_standings,
+    }
+
+    try:
+        r = requests.post(
+            f"{SERVER_URL}/webhook/ingest",
+            json=payload,
+            timeout=60
+        )
+        if r.status_code == 200:
+            data = r.json()
+            logger.info(
+                f"  Servidor recebeu: +{data.get('new',0)} novas | "
+                f"{data.get('updated',0)} atualizadas | "
+                f"{data.get('players',0)} players"
+            )
+            return True
         else:
-            logger.error(f"    ❌ Lote {i+1} falhou")
-        if i < n - 1: time.sleep(1)
-    return total_new, total_upd, total_play
+            logger.error(f"Webhook retornou {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar para o servidor: {e}")
+    return False
+
+
+def run_cycle():
+    """Executa um ciclo completo de coleta e envio."""
+    now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    logger.info("=" * 55)
+    logger.info(f"[{now}] CICLO DE COLETA — coletor_local.py")
+    logger.info("=" * 55)
+
+    # 1. Busca IDs já no servidor (evita reenviar o que já existe)
+    known_ids = get_known_ids()
+    logger.info(f"IDs já no servidor: {len(known_ids)}")
+
+    # 2. Determina seasons
+    season_ids = get_seasons()
+    if not season_ids:
+        logger.error("Nenhuma season configurada!")
+        return
+
+    # 3. Coleta por season
+    all_new_fixtures     = []
+    standings_by_season  = {}
+
+    for sid in season_ids:
+        fixtures = fetch_fixtures_finalized(sid)
+        new_fix  = [f for f in fixtures if str(f.get("id", "")) not in known_ids]
+
+        if new_fix:
+            all_new_fixtures.extend(new_fix)
+            standings_by_season[sid] = fetch_standings(sid)
+            logger.info(f"  Season {sid}: {len(new_fix)} novas para enviar")
+        else:
+            logger.info(f"  Season {sid}: nada novo")
+
+    # 4. Envia ao servidor
+    if all_new_fixtures:
+        logger.info(f"Enviando {len(all_new_fixtures)} partidas ao servidor...")
+        send_to_server(all_new_fixtures, standings_by_season)
+    else:
+        logger.info("Nenhuma partida nova para enviar.")
+
+    logger.info(f"Próximo ciclo em {INTERVAL_MIN} minutos.\n")
+
 
 if __name__ == "__main__":
-    modo_full     = "--full"     in sys.argv
-    modo_descobre = "--descobre" in sys.argv
+    logger.info("╔══════════════════════════════════════════╗")
+    logger.info("║     GT Scout — Coletor Local             ║")
+    logger.info(f"║     Servidor: {SERVER_URL[:28]:<28}║")
+    logger.info(f"║     Intervalo: {INTERVAL_MIN} minutos               ║")
+    logger.info("╚══════════════════════════════════════════╝")
 
-    ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    logger.info("=" * 55)
-    logger.info(f"GT Scout — Coletor Local | {ts}")
-    modo_str = "HISTÓRICO COMPLETO" if modo_full else ("DESCOBRIR SEASONS" if modo_descobre else "INCREMENTAL")
-    logger.info(f"Modo: {modo_str}")
-    logger.info("=" * 55)
+    # Carrega .env se existir
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+        logger.info(".env carregado.")
 
-    if modo_descobre:
-        ids = descobrir_seasons()
-        salvar_seasons(ids)
-        logger.info(f"\nAgora rode: python coletor_local.py --full")
-        sys.exit(0)
-
-    # Carrega seasons
-    season_ids = carregar_seasons()
-    if not season_ids:
-        if modo_full:
-            season_ids = descobrir_seasons()
-            salvar_seasons(season_ids)
-        else:
-            # Incremental sem arquivo: pega as últimas 400 seasons
-            season_ids = list(range(19600, 19199, -1))
-            logger.info(f"  Usando range recente: {len(season_ids)} seasons")
-
-    logger.info(f"Coletando {len(season_ids)} seasons...")
-
-    all_fx, all_st = [], []
-    com_dados = 0
-    for idx, sid in enumerate(season_ids):
-        fx, st = coletar_season(sid)
-        if fx:
-            com_dados += 1
-            logger.info(f"  [{idx+1}/{len(season_ids)}] Season {sid}: {len(fx)} partidas | {len(st)} players")
-        all_fx.extend(fx)
-        all_st.extend(st)
-
-    ts2 = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    logger.info(f"\n[{ts2}] Coletado: {len(all_fx)} partidas | {com_dados} seasons")
-
-    if not all_fx and not all_st:
-        logger.warning("Nada coletado.")
-        sys.exit(1)
-
-    wake_up()
-
-    if not modo_full:
-        known = get_known_ids()
-        if known:
-            antes = len(all_fx)
-            all_fx = [f for f in all_fx if str(f.get("id","")) not in known]
-            pulados = antes - len(all_fx)
-            if pulados:
-                logger.info(f"  Ignorando {pulados} já salvas. Novas: {len(all_fx)}")
-
-    if not all_fx and not all_st:
-        logger.info(f"[{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}] ✅ Nenhuma partida nova.")
-        sys.exit(0)
-
-    logger.info(f"\nEnviando {len(all_fx)} partidas em lotes de {BATCH_SIZE}...")
-    novas, atualizadas, players = enviar(all_fx, all_st)
-
-    ts4 = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    logger.info(f"\n[{ts4}] ✅ CONCLUÍDO: {novas} novas | {atualizadas} atualizadas | {players} players")
+    while True:
+        try:
+            run_cycle()
+        except Exception as e:
+            logger.error(f"Erro inesperado no ciclo: {e}")
+        time.sleep(INTERVAL_MIN * 60)
