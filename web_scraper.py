@@ -6,6 +6,7 @@ curl_cffi usa esse cookie para todas as chamadas à API.
 
 import os
 import asyncio
+import subprocess
 import threading
 import logging
 from datetime import datetime, timedelta
@@ -22,12 +23,16 @@ API_BASE = "https://api.gtleagues.com/api"
 TIMEOUT  = 30
 last_diag = {}
 
+# Caminho do Chromium — igual ao do build.sh
+BROWSERS_PATH = os.getenv(
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "/opt/render/project/src/.browsers"
+)
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
+
 # ── Estado global do cookie Cloudflare ────────────────────────
-_cf_state = {
-    "cf_clearance": None,
-    "expires":      None,   # datetime quando renovar
-}
-_cf_lock = threading.Lock()
+_cf_state = {"cf_clearance": None, "expires": None}
+_cf_lock  = threading.Lock()
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -36,7 +41,29 @@ USER_AGENT = (
 )
 
 
-# ── Playwright async para obter cf_clearance ──────────────────
+def _ensure_browser_installed():
+    """Instala o Chromium em runtime se não existir (fallback seguro)."""
+    import glob
+    pattern = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell")
+    found   = glob.glob(pattern)
+    if not found:
+        logger.warning(f"[CF] Chromium não encontrado em {BROWSERS_PATH} — instalando...")
+        try:
+            env = os.environ.copy()
+            env["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
+            subprocess.run(
+                ["python", "-m", "playwright", "install", "chromium"],
+                env=env, check=True, timeout=300,
+                capture_output=True
+            )
+            logger.info("[CF] Chromium instalado com sucesso em runtime.")
+        except Exception as e:
+            logger.error(f"[CF] Falha ao instalar Chromium em runtime: {e}")
+    else:
+        logger.info(f"[CF] Chromium encontrado: {found[0]}")
+
+
+# ── Playwright async ───────────────────────────────────────────
 async def _fetch_cf_cookie_async():
     from playwright.async_api import async_playwright
     logger.info("[CF] Abrindo Chromium para resolver Cloudflare...")
@@ -57,9 +84,7 @@ async def _fetch_cf_cookie_async():
                 viewport={"width": 1920, "height": 1080},
                 user_agent=USER_AGENT,
                 locale="pt-BR",
-                extra_http_headers={
-                    "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
-                },
+                extra_http_headers={"accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8"},
             )
             await ctx.add_init_script("""
                 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
@@ -71,7 +96,6 @@ async def _fetch_cf_cookie_async():
             await page.goto("https://www.gtleagues.com",
                             wait_until="domcontentloaded", timeout=60000)
 
-            # Aguarda até 30s pelo cf_clearance
             cf_value = None
             for _ in range(30):
                 cookies = await ctx.cookies()
@@ -86,7 +110,7 @@ async def _fetch_cf_cookie_async():
         if cf_value:
             logger.info("[CF] cf_clearance obtido com sucesso!")
         else:
-            logger.warning("[CF] cf_clearance não encontrado — tentará na próxima varredura")
+            logger.warning("[CF] cf_clearance não encontrado.")
         return cf_value
 
     except Exception as e:
@@ -95,26 +119,24 @@ async def _fetch_cf_cookie_async():
 
 
 def _refresh_cf_cookie():
-    """Executa o Playwright em um loop asyncio isolado (thread-safe)."""
+    _ensure_browser_installed()
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         cf_value = loop.run_until_complete(_fetch_cf_cookie_async())
         loop.close()
     except Exception as e:
-        logger.error(f"[CF] Erro ao rodar loop asyncio: {e}")
+        logger.error(f"[CF] Erro asyncio: {e}")
         cf_value = None
 
     with _cf_lock:
         _cf_state["cf_clearance"] = cf_value
-        # Se conseguiu o cookie, renova em 4h; se não, tenta em 20min
         _cf_state["expires"] = datetime.now() + (
             timedelta(hours=4) if cf_value else timedelta(minutes=20)
         )
 
 
 def _ensure_cf_cookie():
-    """Renova o cookie se estiver expirado ou ausente."""
     with _cf_lock:
         expires = _cf_state.get("expires")
         needs   = expires is None or datetime.now() >= expires
@@ -122,7 +144,7 @@ def _ensure_cf_cookie():
         _refresh_cf_cookie()
 
 
-# ── HTTP com curl_cffi + cf_clearance ─────────────────────────
+# ── HTTP ───────────────────────────────────────────────────────
 def _get(path, params=None):
     _ensure_cf_cookie()
     url = f"{API_BASE}{path}"
@@ -143,35 +165,23 @@ def _get(path, params=None):
         "sec-fetch-mode":     "cors",
         "sec-fetch-site":     "same-site",
     }
-
-    cookies = {}
-    if cf_val:
-        cookies["cf_clearance"] = cf_val
+    cookies = {"cf_clearance": cf_val} if cf_val else {}
 
     try:
         resp = cffi_requests.get(
-            url,
-            headers=headers,
-            cookies=cookies,
-            params=params,
-            timeout=TIMEOUT,
-            impersonate="chrome120",
+            url, headers=headers, cookies=cookies,
+            params=params, timeout=TIMEOUT, impersonate="chrome120",
         )
         logger.debug(f"GET {url} → {resp.status_code}")
-
         if resp.status_code == 200:
             return resp.json()
-
         if resp.status_code in (403, 503):
-            logger.warning(f"[CF] Bloqueado ({resp.status_code}) — forçando renovação do cookie")
+            logger.warning(f"[CF] Bloqueado ({resp.status_code}) — renovando cookie")
             with _cf_lock:
-                _cf_state["expires"] = None  # força refresh imediato
-
+                _cf_state["expires"] = None
         logger.warning(f"HTTP {resp.status_code}: {url}")
-
     except Exception as e:
         logger.error(f"Erro GET {url}: {e}")
-
     return None
 
 
@@ -222,7 +232,9 @@ def fetch_fixtures(season_id):
     if not data:
         return []
     items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
-    return [f for f in items if isinstance(items, list) and f.get("status") == 3]
+    if not isinstance(items, list):
+        return []
+    return [f for f in items if f.get("status") == 3]
 
 
 def fetch_scheduled(season_id):
@@ -230,7 +242,9 @@ def fetch_scheduled(season_id):
     if not data:
         return []
     items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
-    return [f for f in items if isinstance(items, list) and f.get("status") != 3]
+    if not isinstance(items, list):
+        return []
+    return [f for f in items if f.get("status") != 3]
 
 
 def fetch_standings(season_id):
@@ -324,17 +338,17 @@ def upsert_stats(raw_p, season_id):
     data = {
         "player_id": pid, "season_id": season_id, "nickname": nick,
         "team": raw_p.get("team", ""),
-        "games_played":  _i(raw_p.get("games_played")),
-        "points":        _i(raw_p.get("points")),
-        "wins":          _i(raw_p.get("wins")),
-        "draws":         _i(raw_p.get("draws")),
-        "losses":        _i(raw_p.get("loses")),
-        "goals_for":     _i(raw_p.get("goals_total_for")     or raw_p.get("score_total_for")),
-        "goals_against": _i(raw_p.get("goals_total_against") or raw_p.get("score_total_against")),
-        "goals_diff":    _i(raw_p.get("goals_total_difference", 0)),
-        "win_rate":      _f(raw_p.get("win_rate")),
-        "draw_rate":     _f(raw_p.get("draw_rate")),
-        "loss_rate":     _f(raw_p.get("loss_rate")),
+        "games_played":            _i(raw_p.get("games_played")),
+        "points":                  _i(raw_p.get("points")),
+        "wins":                    _i(raw_p.get("wins")),
+        "draws":                   _i(raw_p.get("draws")),
+        "losses":                  _i(raw_p.get("loses")),
+        "goals_for":               _i(raw_p.get("goals_total_for")     or raw_p.get("score_total_for")),
+        "goals_against":           _i(raw_p.get("goals_total_against") or raw_p.get("score_total_against")),
+        "goals_diff":              _i(raw_p.get("goals_total_difference", 0)),
+        "win_rate":                _f(raw_p.get("win_rate")),
+        "draw_rate":               _f(raw_p.get("draw_rate")),
+        "loss_rate":               _f(raw_p.get("loss_rate")),
         "goals_for_per_match":     _f(raw_p.get("goals_for_per_match")),
         "goals_against_per_match": _f(raw_p.get("goals_against_per_match")),
         "points_per_match":        _f(raw_p.get("points_per_match")),
@@ -386,7 +400,8 @@ def run_scraper():
         last_diag = {
             "ts": now_str, "new": total_new, "skipped": total_skip,
             "players": total_play, "seasons": len(season_ids),
-            "total_in_db": len(known_ids) + total_new, "cf_cookie": cf_ok,
+            "total_in_db": len(known_ids) + total_new,
+            "cf_cookie": cf_ok, "browsers_path": BROWSERS_PATH,
         }
         logger.info(f"CONCLUÍDO | +{total_new} novas | {total_skip} já existiam | cf={cf_ok}")
     except Exception as e:
