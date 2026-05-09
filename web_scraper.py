@@ -38,10 +38,6 @@ USER_AGENT = (
 
 # ── Playwright async para obter cf_clearance ──────────────────
 async def _fetch_cf_cookie_async():
-    # Garante que o Playwright encontra o Chromium no caminho do Render
-    pw_path = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "")
-    if pw_path:
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = pw_path
     from playwright.async_api import async_playwright
     logger.info("[CF] Abrindo Chromium para resolver Cloudflare...")
     try:

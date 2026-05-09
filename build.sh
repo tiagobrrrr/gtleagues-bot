@@ -5,10 +5,12 @@ echo "==> Instalando dependencias..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-echo "==> Instalando Chromium (sem deps de sistema)..."
-# --with-deps requer sudo — nao funciona no Render
-# O Render ja tem as libs necessarias instaladas
-PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright \
-    python -m playwright install chromium
+echo "==> Instalando Chromium no caminho padrao do Playwright..."
+# Usa o caminho padrao: ~/.cache/ms-playwright
+# No Render isso e /opt/render/.cache/ms-playwright (gravavel)
+python -m playwright install chromium
+
+echo "==> Verificando instalacao..."
+python -c "from playwright.sync_api import sync_playwright; print('Playwright OK')"
 
 echo "==> Build OK!"
