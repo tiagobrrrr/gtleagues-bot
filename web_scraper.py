@@ -1,11 +1,11 @@
 """
 web_scraper.py — GT Scout Bot
-Playwright: visita gtleagues.com para passar no Cloudflare,
-depois usa context.request (APIRequestContext) para chamar a API
-com os mesmos cookies — sem CORS, sem cf_clearance manual.
+- Navega direto para a URL da API no Playwright (resolve CF por domínio)
+- Parser bilíngue: aceita campos em PT e EN
 """
 
 import os
+import json
 import asyncio
 import glob
 import subprocess
@@ -35,9 +35,11 @@ USER_AGENT = (
 
 
 def _ensure_browser():
-    pattern = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "chrome")
-    pattern2 = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell")
-    if not glob.glob(pattern) and not glob.glob(pattern2):
+    patterns = [
+        os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "chrome"),
+        os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell"),
+    ]
+    if not any(glob.glob(p) for p in patterns):
         logger.warning("[PW] Chromium não encontrado — instalando...")
         env = os.environ.copy()
         env["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
@@ -48,19 +50,13 @@ def _ensure_browser():
         logger.info("[PW] Chromium instalado.")
 
 
-async def _pw_get(path: str, params: dict = None):
+async def _pw_get_url(url: str) -> dict | list | None:
     """
-    1. Abre contexto Playwright
-    2. Visita www.gtleagues.com → passa no Cloudflare (cookies ficam no contexto)
-    3. Usa context.request.get() com os mesmos cookies → API responde 200
+    Navega diretamente para a URL da API no browser.
+    O Cloudflare resolve o challenge para api.gtleagues.com
+    e depois a página retorna o JSON diretamente.
     """
     from playwright.async_api import async_playwright
-
-    url = f"{API_BASE}{path}"
-    if params:
-        from urllib.parse import urlencode
-        url = f"{url}?{urlencode(params)}"
-
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -79,7 +75,10 @@ async def _pw_get(path: str, params: dict = None):
                 user_agent=USER_AGENT,
                 locale="pt-BR",
                 extra_http_headers={
+                    "accept":          "application/json, text/plain, */*",
                     "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+                    "origin":          "https://www.gtleagues.com",
+                    "referer":         "https://www.gtleagues.com/",
                 },
             )
             await ctx.add_init_script("""
@@ -89,36 +88,23 @@ async def _pw_get(path: str, params: dict = None):
                 window.chrome={runtime:{},loadTimes:()=>{},csi:()=>{},app:{}};
             """)
 
-            # Passo 1: visita o site para ganhar os cookies do Cloudflare
             page = await ctx.new_page()
-            logger.debug("[PW] Visitando gtleagues.com...")
-            await page.goto("https://www.gtleagues.com",
-                            wait_until="networkidle", timeout=60000)
-            await asyncio.sleep(2)
-            await page.close()
 
-            # Passo 2: usa context.request com os cookies já setados
-            logger.debug(f"[PW] API request: {url}")
-            resp = await ctx.request.get(
-                url,
-                headers={
-                    "accept":         "application/json, text/plain, */*",
-                    "accept-language":"pt-BR,pt;q=0.9,en-US;q=0.8",
-                    "origin":         "https://www.gtleagues.com",
-                    "referer":        "https://www.gtleagues.com/",
-                    "user-agent":     USER_AGENT,
-                },
-            )
+            # Navega direto para a URL da API — CF resolve o challenge para esse domínio
+            logger.debug(f"[PW] Navegando: {url}")
+            resp = await page.goto(url, wait_until="networkidle", timeout=60000)
 
-            status = resp.status
-            logger.debug(f"[PW] Status: {status}")
-
-            if status == 200:
-                data = await resp.json()
+            if resp and resp.status == 200:
+                # Pega o conteúdo da página (JSON bruto)
+                content = await page.content()
+                # Extrai o JSON do <body> (remove tags HTML que o browser adiciona)
+                body_text = await page.evaluate("() => document.body.innerText")
+                data = json.loads(body_text)
                 await browser.close()
                 return data
 
-            body = await resp.text()
+            status = resp.status if resp else "?"
+            body = await page.evaluate("() => document.body.innerText") if resp else ""
             logger.warning(f"[PW] HTTP {status}: {url} — {body[:200]}")
             await browser.close()
             return None
@@ -129,12 +115,17 @@ async def _pw_get(path: str, params: dict = None):
 
 
 def _get(path, params=None):
+    url = f"{API_BASE}{path}"
+    if params:
+        from urllib.parse import urlencode
+        url = f"{url}?{urlencode(params)}"
+
     with _pw_lock:
         _ensure_browser()
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(_pw_get(path, params))
+            result = loop.run_until_complete(_pw_get_url(url))
             loop.close()
             return result
         except Exception as e:
@@ -163,8 +154,8 @@ def fetch_active_seasons():
         if not sid:
             continue
         status   = s.get("status")
-        end_date = s.get("endDate") or s.get("end_date") or ""
-        if status in (1, "1", "active"):
+        end_date = s.get("endDate") or s.get("end_date") or s.get("fim") or ""
+        if status in (1, "1", "active", "ativo"):
             active.append(sid)
         elif end_date:
             try:
@@ -188,7 +179,7 @@ def fetch_fixtures(season_id):
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
         return []
-    items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
+    items = data if isinstance(data, list) else data.get("data", data.get("fixtures", data.get("partidas", [])))
     if not isinstance(items, list):
         return []
     return [f for f in items if f.get("status") == 3]
@@ -198,7 +189,7 @@ def fetch_scheduled(season_id):
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
         return []
-    items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
+    items = data if isinstance(data, list) else data.get("data", data.get("fixtures", data.get("partidas", [])))
     if not isinstance(items, list):
         return []
     return [f for f in items if f.get("status") != 3]
@@ -212,47 +203,73 @@ def fetch_standings(season_id):
     return items if isinstance(items, list) else []
 
 
-# ── Parse ──────────────────────────────────────────────────────
+# ── Parser bilíngue (PT + EN) ──────────────────────────────────
+def _pick(*args):
+    """Retorna o primeiro valor não-None entre as chaves fornecidas."""
+    d, keys = args[0], args[1:]
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def parse_match(raw):
     try:
-        result     = raw.get("result") or {}
-        stats      = result.get("stats") or {}
-        home_score = stats.get("home_score")
-        away_score = stats.get("away_score")
-        parts      = raw.get("participants", [])
-        home_p     = next((p for p in parts if p.get("side") == "home"), None)
-        away_p     = next((p for p in parts if p.get("side") == "away"), None)
+        # Resultado / stats — aceita PT e EN
+        resultado = raw.get("resultado") or raw.get("result") or {}
+        stats     = resultado.get("estatisticas") or resultado.get("stats") or {}
+
+        home_score = _pick(stats, "home_score", "placar_casa", "pontuacao_casa")
+        away_score = _pick(stats, "away_score",  "placar_fora", "pontuacao_fora",
+                           "pontuação_fora", "score_away")
+
+        # Participantes
+        parts  = raw.get("participantes") or raw.get("participants") or []
+        # lado: "casa"/"home" ou "para longe"/"para_longe"/"away"
+        home_p = next((p for p in parts if p.get("lado") in ("casa", "home")
+                       or p.get("side") == "home"), None)
+        away_p = next((p for p in parts if p.get("lado") in ("para longe", "para_longe", "away", "fora")
+                       or p.get("side") == "away"), None)
+
         if not home_p or not away_p:
+            logger.debug(f"Sem participantes: {raw.get('id')} lados={[p.get('lado') or p.get('side') for p in parts]}")
             return None
 
         def extract(p):
-            part = p.get("participant") or {}
-            pl   = part.get("player") or {}
-            tm   = part.get("team")   or {}
+            part = p.get("participante") or p.get("participant") or {}
+            pl   = part.get("jogador")   or part.get("player")   or {}
+            tm   = part.get("equipe")    or part.get("team")      or {}
+            nick = pl.get("Apelido") or pl.get("apelido") or pl.get("nickname") or ""
             return {
                 "player_id": str(pl.get("id", "")),
-                "nickname":  (pl.get("nickname") or "").strip(),
-                "team":      tm.get("name", ""),
-                "crest":     tm.get("crest", ""),
+                "nickname":  nick.strip(),
+                "team":      tm.get("nome") or tm.get("name") or "",
+                "crest":     tm.get("crista") or tm.get("crest") or "",
                 "part_id":   str(part.get("id", "")),
             }
 
         h  = extract(home_p);  a  = extract(away_p)
-        si = raw.get("season") or {};  tr = si.get("tournament") or {}
-        ca = tr.get("category") or {}; sp = ca.get("sport") or {}
+
+        # Season / torneio
+        si = raw.get("season") or raw.get("temporada") or {}
+        tr = si.get("tournament") or si.get("torneio") or {}
+        ca = tr.get("category")   or tr.get("categoria") or {}
+        sp = ca.get("sport")      or ca.get("esporte")   or {}
 
         return {
             "match_id":            str(raw["id"]),
-            "kickoff":             raw.get("kickoff", ""),
-            "week":                raw.get("week"),
-            "match_nr":            raw.get("matchNr"),
+            "kickoff":             _pick(raw, "kickoff", "inicio", "data_inicio") or "",
+            "week":                _pick(raw, "week", "semana"),
+            "match_nr":            _pick(raw, "matchNr", "match_nr", "numero"),
             "status":              raw.get("status"),
-            "season_id":           str(raw.get("seasonId") or si.get("id") or ""),
-            "season_name":         si.get("name", ""),
-            "tournament_name":     tr.get("name", ""),
-            "category_name":       ca.get("name", "GT Leagues"),
-            "sport_name":          sp.get("name", "FC25"),
-            "channel":             raw.get("channel", ""),
+            "season_id":           str(_pick(raw, "seasonId", "season_id",
+                                             "temporadaId") or si.get("id") or ""),
+            "season_name":         si.get("name") or si.get("nome") or "",
+            "tournament_name":     tr.get("name") or tr.get("nome") or "",
+            "category_name":       ca.get("name") or ca.get("nome") or "GT Leagues",
+            "sport_name":          sp.get("name") or sp.get("nome") or "FC25",
+            "channel":             _pick(raw, "channel", "canal") or "",
             "home_player_id":      h["player_id"],
             "home_nickname":       h["nickname"],
             "home_team":           h["team"],
@@ -288,27 +305,29 @@ def upsert_stats(raw_p, season_id):
         try: return int(v) if v is not None else 0
         except: return 0
 
-    pid = str(raw_p.get("playerId") or raw_p.get("id") or "")
+    pid = str(raw_p.get("playerId") or raw_p.get("player_id") or raw_p.get("id") or "")
     if not pid:
         return
-    nick = (raw_p.get("nickname") or "").strip()
+    nick = (raw_p.get("nickname") or raw_p.get("Apelido") or raw_p.get("apelido") or "").strip()
     data = {
         "player_id": pid, "season_id": season_id, "nickname": nick,
-        "team": raw_p.get("team", ""),
-        "games_played":            _i(raw_p.get("games_played")),
-        "points":                  _i(raw_p.get("points")),
-        "wins":                    _i(raw_p.get("wins")),
-        "draws":                   _i(raw_p.get("draws")),
-        "losses":                  _i(raw_p.get("loses")),
-        "goals_for":               _i(raw_p.get("goals_total_for")     or raw_p.get("score_total_for")),
-        "goals_against":           _i(raw_p.get("goals_total_against") or raw_p.get("score_total_against")),
-        "goals_diff":              _i(raw_p.get("goals_total_difference", 0)),
-        "win_rate":                _f(raw_p.get("win_rate")),
-        "draw_rate":               _f(raw_p.get("draw_rate")),
-        "loss_rate":               _f(raw_p.get("loss_rate")),
-        "goals_for_per_match":     _f(raw_p.get("goals_for_per_match")),
-        "goals_against_per_match": _f(raw_p.get("goals_against_per_match")),
-        "points_per_match":        _f(raw_p.get("points_per_match")),
+        "team": raw_p.get("team") or raw_p.get("equipe") or "",
+        "games_played":            _i(raw_p.get("games_played") or raw_p.get("jogos")),
+        "points":                  _i(raw_p.get("points")       or raw_p.get("pontos")),
+        "wins":                    _i(raw_p.get("wins")         or raw_p.get("vitorias")),
+        "draws":                   _i(raw_p.get("draws")        or raw_p.get("empates")),
+        "losses":                  _i(raw_p.get("loses")        or raw_p.get("derrotas")),
+        "goals_for":               _i(raw_p.get("goals_total_for")     or raw_p.get("score_total_for")
+                                      or raw_p.get("gols_feitos")),
+        "goals_against":           _i(raw_p.get("goals_total_against") or raw_p.get("score_total_against")
+                                      or raw_p.get("gols_sofridos")),
+        "goals_diff":              _i(raw_p.get("goals_total_difference") or raw_p.get("saldo_gols", 0)),
+        "win_rate":                _f(raw_p.get("win_rate")   or raw_p.get("taxa_vitoria")),
+        "draw_rate":               _f(raw_p.get("draw_rate")  or raw_p.get("taxa_empate")),
+        "loss_rate":               _f(raw_p.get("loss_rate")  or raw_p.get("taxa_derrota")),
+        "goals_for_per_match":     _f(raw_p.get("goals_for_per_match")     or raw_p.get("media_gols_feitos")),
+        "goals_against_per_match": _f(raw_p.get("goals_against_per_match") or raw_p.get("media_gols_sofridos")),
+        "points_per_match":        _f(raw_p.get("points_per_match")        or raw_p.get("media_pontos")),
     }
     ex = PlayerStats.query.filter_by(player_id=pid, season_id=season_id).first()
     if ex:
@@ -324,7 +343,7 @@ def run_scraper():
     global last_diag
     now_str = datetime.now(BR_TZ).strftime("%d/%m/%Y %H:%M:%S")
     logger.info("=" * 55)
-    logger.info(f"[{now_str}] VARREDURA — Playwright context.request")
+    logger.info(f"[{now_str}] VARREDURA — Playwright direct navigation")
     logger.info("=" * 55)
 
     known_ids  = set(r[0] for r in db.session.query(Match.match_id).all())
