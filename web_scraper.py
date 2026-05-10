@@ -1,11 +1,13 @@
 """
 web_scraper.py — GT Scout Bot
-Usa Playwright com --headless=new (modo stealth) para fazer as requisições
-diretamente na sessão autenticada do Cloudflare, sem precisar do cf_clearance.
+Playwright: visita gtleagues.com para passar no Cloudflare,
+depois usa context.request (APIRequestContext) para chamar a API
+com os mesmos cookies — sem CORS, sem cf_clearance manual.
 """
 
 import os
 import asyncio
+import glob
 import subprocess
 import threading
 import logging
@@ -18,11 +20,12 @@ from models import db, Match, Player, PlayerStats
 logger  = logging.getLogger(__name__)
 BR_TZ   = pytz.timezone("America/Sao_Paulo")
 
-API_BASE = "https://api.gtleagues.com/api"
-last_diag = {}
-
+API_BASE      = "https://api.gtleagues.com/api"
 BROWSERS_PATH = "/opt/render/project/src/.browsers"
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
+
+last_diag = {}
+_pw_lock  = threading.Lock()
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -30,14 +33,11 @@ USER_AGENT = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
-# Lock para garantir uma sessão Playwright por vez
-_pw_lock = threading.Lock()
-
 
 def _ensure_browser():
-    import glob
-    pattern = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell")
-    if not glob.glob(pattern):
+    pattern = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "chrome")
+    pattern2 = os.path.join(BROWSERS_PATH, "chromium*", "chrome-linux", "headless_shell")
+    if not glob.glob(pattern) and not glob.glob(pattern2):
         logger.warning("[PW] Chromium não encontrado — instalando...")
         env = os.environ.copy()
         env["PLAYWRIGHT_BROWSERS_PATH"] = BROWSERS_PATH
@@ -46,18 +46,17 @@ def _ensure_browser():
             env=env, check=True, timeout=300, capture_output=True
         )
         logger.info("[PW] Chromium instalado.")
-    else:
-        logger.debug("[PW] Chromium OK.")
 
 
-async def _pw_fetch_json(url: str, params: dict = None) -> dict | list | None:
+async def _pw_get(path: str, params: dict = None):
     """
-    Abre o Playwright, visita gtleagues.com para autenticar no Cloudflare,
-    depois faz fetch() da URL da API dentro da mesma página (mesma sessão).
-    Retorna o JSON ou None.
+    1. Abre contexto Playwright
+    2. Visita www.gtleagues.com → passa no Cloudflare (cookies ficam no contexto)
+    3. Usa context.request.get() com os mesmos cookies → API responde 200
     """
     from playwright.async_api import async_playwright
 
+    url = f"{API_BASE}{path}"
     if params:
         from urllib.parse import urlencode
         url = f"{url}?{urlencode(params)}"
@@ -72,7 +71,6 @@ async def _pw_fetch_json(url: str, params: dict = None) -> dict | list | None:
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
                     "--window-size=1920,1080",
                 ],
             )
@@ -84,80 +82,64 @@ async def _pw_fetch_json(url: str, params: dict = None) -> dict | list | None:
                     "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
                 },
             )
-            # Esconde sinais de automação
             await ctx.add_init_script("""
                 Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
                 Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
-                Object.defineProperty(navigator,'languages',{get:()=>['pt-BR','pt','en-US','en']});
+                Object.defineProperty(navigator,'languages',{get:()=>['pt-BR','pt','en-US']});
                 window.chrome={runtime:{},loadTimes:()=>{},csi:()=>{},app:{}};
-                const orig = navigator.permissions.query.bind(navigator.permissions);
-                navigator.permissions.query = (p) =>
-                    p.name === 'notifications'
-                    ? Promise.resolve({state: Notification.permission})
-                    : orig(p);
             """)
 
+            # Passo 1: visita o site para ganhar os cookies do Cloudflare
             page = await ctx.new_page()
-
-            # 1. Visita a página principal para passar pelo Cloudflare
             logger.debug("[PW] Visitando gtleagues.com...")
             await page.goto("https://www.gtleagues.com",
                             wait_until="networkidle", timeout=60000)
             await asyncio.sleep(2)
+            await page.close()
 
-            # 2. Faz o fetch da API dentro da mesma sessão (já autenticado no CF)
-            logger.debug(f"[PW] Fetching: {url}")
-            result = await page.evaluate(f"""async () => {{
-                try {{
-                    const r = await fetch("{url}", {{
-                        method: "GET",
-                        headers: {{
-                            "accept": "application/json, text/plain, */*",
-                            "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8",
-                            "origin": "https://www.gtleagues.com",
-                            "referer": "https://www.gtleagues.com/",
-                        }},
-                        credentials: "include",
-                    }});
-                    if (!r.ok) return {{ __error__: r.status }};
-                    return await r.json();
-                }} catch(e) {{
-                    return {{ __error__: e.toString() }};
-                }}
-            }}""")
+            # Passo 2: usa context.request com os cookies já setados
+            logger.debug(f"[PW] API request: {url}")
+            resp = await ctx.request.get(
+                url,
+                headers={
+                    "accept":         "application/json, text/plain, */*",
+                    "accept-language":"pt-BR,pt;q=0.9,en-US;q=0.8",
+                    "origin":         "https://www.gtleagues.com",
+                    "referer":        "https://www.gtleagues.com/",
+                    "user-agent":     USER_AGENT,
+                },
+            )
 
+            status = resp.status
+            logger.debug(f"[PW] Status: {status}")
+
+            if status == 200:
+                data = await resp.json()
+                await browser.close()
+                return data
+
+            body = await resp.text()
+            logger.warning(f"[PW] HTTP {status}: {url} — {body[:200]}")
             await browser.close()
-
-            if isinstance(result, dict) and "__error__" in result:
-                logger.warning(f"[PW] Fetch error: {result['__error__']} — {url}")
-                return None
-
-            return result
+            return None
 
     except Exception as e:
         logger.error(f"[PW] Erro: {e}")
         return None
 
 
-def _run_pw(url, params=None):
-    """Executa o Playwright numa thread isolada com lock."""
+def _get(path, params=None):
     with _pw_lock:
         _ensure_browser()
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(_pw_fetch_json(url, params))
+            result = loop.run_until_complete(_pw_get(path, params))
             loop.close()
             return result
         except Exception as e:
-            logger.error(f"[PW] Erro run: {e}")
+            logger.error(f"[PW] Erro loop: {e}")
             return None
-
-
-def _get(path, params=None):
-    url = f"{API_BASE}{path}"
-    logger.debug(f"GET {url}")
-    return _run_pw(url, params)
 
 
 # ── Seasons ────────────────────────────────────────────────────
@@ -338,12 +320,11 @@ def upsert_stats(raw_p, season_id):
         db.session.add(Player(player_id=pid, nickname=nick))
 
 
-# ── Varredura principal ────────────────────────────────────────
 def run_scraper():
     global last_diag
     now_str = datetime.now(BR_TZ).strftime("%d/%m/%Y %H:%M:%S")
     logger.info("=" * 55)
-    logger.info(f"[{now_str}] VARREDURA — Playwright fetch in-page")
+    logger.info(f"[{now_str}] VARREDURA — Playwright context.request")
     logger.info("=" * 55)
 
     known_ids  = set(r[0] for r in db.session.query(Match.match_id).all())
