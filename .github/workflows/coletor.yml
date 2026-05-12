@@ -1,0 +1,30 @@
+name: GT Scout Coletor
+
+on:
+  schedule:
+    - cron: '0,15,30,45 * * * *'
+  workflow_dispatch:
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install requests
+
+      - name: Coletar e enviar
+        env:
+          SERVER_URL:    ${{ secrets.SERVER_URL }}
+          WEBHOOK_KEY:   ${{ secrets.WEBHOOK_KEY }}
+          GT_SEASON_IDS: ${{ secrets.GT_SEASON_IDS }}
+        run: python gh_coletor.py
