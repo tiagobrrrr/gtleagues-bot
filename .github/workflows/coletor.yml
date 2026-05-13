@@ -29,4 +29,5 @@ jobs:
           SERVER_URL:    ${{ secrets.SERVER_URL }}
           WEBHOOK_KEY:   ${{ secrets.WEBHOOK_KEY }}
           GT_SEASON_IDS: ${{ secrets.GT_SEASON_IDS }}
+          GT_SPORT_ID:   ${{ secrets.GT_SPORT_ID }}
         run: python gh_coletor.py
