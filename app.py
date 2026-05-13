@@ -18,10 +18,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from models import db, Match, Player, PlayerStats
 from web_scraper import run_scraper, get_last_diag, fetch_scheduled, get_season_ids, parse_match
 from data_analyzer import DataAnalyzer
-from excel_exporter import (
-    build_excel_reports, build_excel_stats,
-    build_excel_h2h, build_excel_charts
-)
+from statistics_calculator import StatisticsCalculator
+from report_generator import ReportGenerator
 from email_service import EmailService
 
 load_dotenv()
@@ -55,25 +53,26 @@ with app.app_context():
     logger.info("✅ Tabelas criadas/verificadas.")
 
 # ── Serviços ───────────────────────────────────────────────────
-analyzer = DataAnalyzer()
-email_svc = EmailService()
+analyzer   = DataAnalyzer()
+calculator = StatisticsCalculator()
+reporter   = ReportGenerator()
+email_svc  = EmailService()
 
 # ── Scheduler ─────────────────────────────────────────────────
-INTERVAL = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
-
-scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
+INTERVAL    = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
 weekly_day  = int(os.getenv("EMAIL_WEEKLY_DAY", 0))
 weekly_hour = int(os.getenv("EMAIL_WEEKLY_HOUR", 8))
 DAY_NAMES   = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
+scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
+
 
 def weekly_email_job():
     with app.app_context():
-        matches = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).all()
-        xlsx    = build_excel_reports(matches)
-        fname   = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d')}.xlsx"
-        ok      = email_svc.send_report(xlsx, fname, len(matches))
-        logger.info(f"Email semanal {'enviado' if ok else 'FALHOU'}.")
+        xlsx, fname = reporter.generate_weekly_report()
+        total = Match.query.filter(Match.home_score.isnot(None)).count()
+        ok    = email_svc.send_report(xlsx, fname, total)
+        logger.info(f"Email semanal {'✅ enviado' if ok else '❌ FALHOU'}.")
 
 
 scheduler.add_job(weekly_email_job, "cron",
@@ -147,42 +146,43 @@ def charts():
 
 @app.route("/reports")
 def reports():
+    dash = reporter.get_dashboard_data()
     return render_template("reports.html",
-                           top_scorers=analyzer.get_top_scorers(),
-                           most_games=analyzer.get_most_games(),
-                           summary=analyzer.get_summary())
+                           top_scorers  = dash["top_scorers"],
+                           most_games   = dash["most_active"],
+                           biggest_wins = dash["biggest_wins"],
+                           high_scoring = dash["high_scoring"],
+                           summary      = dash["summary"],
+                           goals_sum    = dash["goals_summary"])
 
 
 # ── Downloads ──────────────────────────────────────────────────
 @app.route("/download/excel/reports")
 def download_excel_reports():
-    matches = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).all()
-    if not matches:
+    xlsx, fname = reporter.generate_weekly_report()
+    if not xlsx:
         return "Nenhuma partida coletada.", 404
-    fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-    return send_file(io.BytesIO(build_excel_reports(matches)),
+    return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
-    stats = analyzer.avg_goals_individual()
-    if not stats:
+    xlsx, fname = reporter.generate_stats_report()
+    if not xlsx:
         return "Sem dados.", 404
-    fname = f"gtscout_estatisticas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-    return send_file(io.BytesIO(build_excel_stats(stats)),
+    return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
-    stats = analyzer.avg_goals_individual()
-    if not stats:
+    xlsx, fname = reporter.generate_charts_report()
+    if not xlsx:
         return "Sem dados.", 404
-    fname = f"gtscout_graficos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-    return send_file(io.BytesIO(build_excel_charts(stats)),
+    return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
@@ -193,11 +193,11 @@ def download_excel_h2h():
     p2 = request.args.get("p2", "")
     if not p1 or not p2:
         return redirect(url_for("head_to_head"))
-    result = analyzer.h2h_stats(p1, p2)
-    if not result["games"]:
+    result = reporter.generate_h2h_report(p1, p2)
+    if not result:
         return "Nenhum confronto encontrado.", 404
-    fname = f"gtscout_h2h_{p1}_vs_{p2}.xlsx"
-    return send_file(io.BytesIO(build_excel_h2h(result["games"], p1, p2, result["p1"], result["p2"])),
+    xlsx, fname = result
+    return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
@@ -213,7 +213,8 @@ def api_status():
     jobs = {job.id: str(job.next_run_time) for job in scheduler.get_jobs()}
     return jsonify({
         "status":            "ok",
-        "coleta":            "GitHub Actions (a cada 15 min)",
+        "coleta":            "GitHub Actions (gh_coletor.py)",
+        "interval_minutes":  INTERVAL,
         "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
         "total_db":          Match.query.count(),
         "scheduler":         jobs,
@@ -224,6 +225,11 @@ def api_status():
 @app.route("/api/stats")
 def api_stats():
     return jsonify(analyzer.avg_goals_individual())
+
+
+@app.route("/api/dashboard")
+def api_dashboard():
+    return jsonify(reporter.get_dashboard_data())
 
 
 @app.route("/api/known-ids")
@@ -262,7 +268,7 @@ def webhook_ingest():
 
     try:
         db.session.commit()
-        logger.info(f"[Webhook] +{new_ct} novas | {upd_ct} já existiam | {play_ct} players")
+        logger.info(f"[Webhook] ✅ +{new_ct} novas | {upd_ct} já existiam | {play_ct} players")
         return jsonify({"ok": True, "new": new_ct, "updated": upd_ct, "players": play_ct})
     except Exception as e:
         db.session.rollback()
@@ -271,22 +277,30 @@ def webhook_ingest():
 
 @app.route("/send-email", methods=["POST"])
 def send_email_now():
-    matches = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).all()
-    xlsx  = build_excel_reports(matches)
-    fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d')}.xlsx"
-    ok    = email_svc.send_report(xlsx, fname, len(matches))
-    return jsonify({"ok": ok, "matches": len(matches)})
+    xlsx, fname = reporter.generate_weekly_report()
+    total = Match.query.filter(Match.home_score.isnot(None)).count()
+    ok    = email_svc.send_report(xlsx, fname, total)
+    return jsonify({"ok": ok, "matches": total})
 
 
 @app.route("/diagnostico")
 def diagnostico():
     return jsonify({
         "bot":              "GT Scout",
-        "coleta":           "GitHub Actions (gh_coletor.py)",
+        "coleta":           "GitHub Actions (gh_coletor.py — a cada 15 min)",
         "db_matches":       Match.query.count(),
         "interval_minutes": INTERVAL,
         "last_scrape":      get_last_diag(),
         "season_ids":       os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
+        "modulos": [
+            "data_analyzer.py",
+            "statistics_calculator.py",
+            "report_generator.py",
+            "email_service.py",
+            "excel_exporter.py",
+            "web_scraper.py",
+            "gh_coletor.py",
+        ]
     })
 
 
