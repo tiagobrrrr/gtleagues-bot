@@ -1,11 +1,13 @@
 """
-gh_coletor.py — Roda no GitHub Actions (IP não bloqueado pelo Cloudflare)
-Descobre seasons ativas, coleta partidas finalizadas e envia ao Render via webhook.
+gh_coletor.py — GT Scout Bot / GitHub Actions
+Estratégia robusta de descoberta de seasons:
+1. Tenta /seasons da API
+2. Varre IDs sequenciais ao redor dos conhecidos
+3. Sempre garante as seasons do env
 """
 
 import os
 import sys
-import json
 import logging
 from datetime import datetime, timedelta
 
@@ -20,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 SERVER_URL    = os.environ["SERVER_URL"]
 WEBHOOK_KEY   = os.environ["WEBHOOK_KEY"]
-GT_SEASON_IDS = os.environ.get("GT_SEASON_IDS", "")
-SPORT_ID      = os.environ.get("GT_SPORT_ID", "6")   # 6 = FC25
+GT_SEASON_IDS = os.environ.get("GT_SEASON_IDS", "19211")
+SPORT_ID      = os.environ.get("GT_SPORT_ID", "6")
 
 API_BASE = "https://api.gtleagues.com/api"
-TIMEOUT  = 30
+TIMEOUT  = 20
 
 HEADERS = {
     "accept":           "application/json, text/plain, */*",
@@ -51,102 +53,160 @@ def _get(path, params=None):
         r = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
         if r.status_code == 200:
             return r.json()
-        logger.warning(f"HTTP {r.status_code}: {url}")
+        if r.status_code != 404:
+            logger.debug(f"HTTP {r.status_code}: {path}")
     except Exception as e:
-        logger.error(f"Erro GET {url}: {e}")
+        logger.debug(f"Erro {path}: {e}")
     return None
 
 
 def get_known_ids():
-    """IDs já no servidor — evita reenvio."""
     try:
         r = requests.get(f"{SERVER_URL}/api/known-ids", timeout=20)
         if r.status_code == 200:
             ids = set(str(i) for i in r.json().get("ids", []))
-            logger.info(f"IDs já no servidor: {len(ids)}")
+            logger.info(f"IDs no servidor: {len(ids)}")
             return ids
     except Exception as e:
-        logger.error(f"Erro ao buscar known-ids: {e}")
+        logger.error(f"Erro known-ids: {e}")
     return set()
 
 
-def discover_seasons():
+def get_max_season_from_db(known_match_ids):
     """
-    Descobre seasons ativas de múltiplas formas:
-    1. Via /seasons (lista geral)
-    2. Via /sports/{id}/seasons (por esporte)
-    3. Fallback: IDs do env GT_SEASON_IDS
+    Descobre o maior season_id a partir dos match_ids já no banco.
+    Faz uma requisição de diagnóstico ao servidor.
     """
+    try:
+        r = requests.get(f"{SERVER_URL}/api/summary", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            seasons = data.get("seasons", [])
+            if seasons:
+                int_seasons = []
+                for s in seasons:
+                    try: int_seasons.append(int(s))
+                    except: pass
+                if int_seasons:
+                    return max(int_seasons)
+    except Exception:
+        pass
+    return None
+
+
+def discover_seasons_from_api():
+    """Tenta listar seasons via API."""
     found = set()
 
-    # Env como garantia
-    if GT_SEASON_IDS:
-        for s in GT_SEASON_IDS.split(","):
-            s = s.strip()
-            if s:
-                found.add(s)
-        logger.info(f"Seasons do env: {found}")
-
-    # Tenta /seasons com paginação
-    for offset in range(0, 600, 200):
-        data = _get("/seasons", {"limit": 200, "offset": offset})
-        if not data:
-            break
-        items = data if isinstance(data, list) else data.get("data", [])
-        if not items:
-            break
-
-        cutoff = datetime.now() - timedelta(days=30)
-        for s in items:
-            sid      = str(s.get("id", ""))
-            if not sid:
-                continue
-            status   = s.get("status")
-            end_date = s.get("endDate") or s.get("end_date") or ""
-            start    = s.get("startDate") or s.get("start_date") or ""
-
-            # Ativa: status 1 ou 2, ou iniciada nos últimos 30 dias
-            if status in (1, 2, "1", "2", "active", "running"):
-                found.add(sid)
-                continue
-
-            # Encerrada há menos de 30 dias (pode ter partidas pendentes)
-            if end_date:
-                try:
-                    ed = datetime.fromisoformat(end_date[:10])
-                    if ed >= cutoff:
+    # Endpoint 1: /seasons genérico
+    for offset in [0, 200, 400]:
+        data = _get("/seasons", {"limit": 200, "offset": offset, "status": 1})
+        if data:
+            items = data if isinstance(data, list) else data.get("data", [])
+            if isinstance(items, list):
+                for s in items:
+                    sid = str(s.get("id", ""))
+                    if sid:
                         found.add(sid)
-                        continue
-                except Exception:
-                    pass
+                logger.info(f"  /seasons offset={offset}: {len(items)} retornadas")
+            if not items or len(items) < 200:
+                break
 
-            # Iniciada nos últimos 30 dias
-            if start:
-                try:
-                    sd = datetime.fromisoformat(start[:10])
-                    if sd >= cutoff:
+    # Endpoint 2: /sports/{id}/seasons
+    for status in [1, 2, None]:
+        params = {"limit": 100}
+        if status:
+            params["status"] = status
+        data = _get(f"/sports/{SPORT_ID}/seasons", params)
+        if data:
+            items = data if isinstance(data, list) else data.get("data", [])
+            if isinstance(items, list):
+                for s in items:
+                    sid = str(s.get("id", ""))
+                    if sid:
                         found.add(sid)
-                except Exception:
-                    pass
 
-        if len(items) < 200:
-            break
+    logger.info(f"Seasons via API: {len(found)}")
+    return found
 
-    # Tenta /sports/{id}/seasons
-    data2 = _get(f"/sports/{SPORT_ID}/seasons", {"limit": 100, "offset": 0, "status": 1})
-    if data2:
-        items2 = data2 if isinstance(data2, list) else data2.get("data", [])
-        for s in (items2 or []):
-            sid = str(s.get("id", ""))
-            if sid:
-                found.add(sid)
 
-    logger.info(f"Total de seasons a varrer: {len(found)} → {sorted(found)}")
-    return list(found)
+def scan_sequential_seasons(base_ids, range_before=20, range_after=250):
+    """
+    Varre IDs sequenciais em paralelo (ThreadPoolExecutor).
+    Muito mais rápido que sequencial.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    found = set()
+    if not base_ids:
+        return found
+
+    int_ids = []
+    for s in base_ids:
+        try: int_ids.append(int(s))
+        except: pass
+
+    if not int_ids:
+        return found
+
+    min_id = max(1, min(int_ids) - range_before)
+    max_id = max(int_ids) + range_after
+    candidates = list(range(min_id, max_id + 1))
+
+    logger.info(f"Scan paralelo: {min_id} → {max_id} ({len(candidates)} seasons, 20 threads)")
+
+    def check(sid):
+        data = _get(f"/seasons/{sid}/fixtures", {"limit": 1, "offset": 0})
+        if data is None:
+            return None
+        items = data if isinstance(data, list) else data.get("data", data.get("fixtures", []))
+        if isinstance(items, list) and len(items) > 0:
+            return str(sid)
+        return None
+
+    with ThreadPoolExecutor(max_workers=20) as exe:
+        futures = {exe.submit(check, sid): sid for sid in candidates}
+        for f in as_completed(futures):
+            result = f.result()
+            if result:
+                found.add(result)
+
+    logger.info(f"Seasons com fixtures (scan): {len(found)} → {sorted(found)[:10]}...")
+    return found
+
+
+def discover_all_seasons():
+    """Combina todas as estratégias de descoberta."""
+    all_seasons = set()
+
+    # 1. Seasons do env (garantia mínima)
+    env_ids = {s.strip() for s in GT_SEASON_IDS.split(",") if s.strip()}
+    all_seasons |= env_ids
+    logger.info(f"Seasons do env: {env_ids}")
+
+    # 2. Tenta API
+    api_seasons = discover_seasons_from_api()
+    all_seasons |= api_seasons
+
+    # 3. Pega o maior season_id já no servidor
+    max_from_db = get_max_season_from_db(None)
+    if max_from_db:
+        logger.info(f"Maior season no banco: {max_from_db}")
+        all_seasons.add(str(max_from_db))
+
+    # 4. Determina base para scan sequencial
+    base = all_seasons.copy()
+    if max_from_db:
+        base.add(str(max_from_db))
+
+    # 5. Scan sequencial (mais agressivo — garante pegar seasons novas)
+    seq_seasons = scan_sequential_seasons(base, range_before=20, range_after=250)
+    all_seasons |= seq_seasons
+
+    logger.info(f"Total final de seasons a verificar: {len(all_seasons)}")
+    return list(all_seasons)
 
 
 def fetch_fixtures(season_id):
-    """Partidas finalizadas (status == 3)."""
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
         return []
@@ -154,8 +214,6 @@ def fetch_fixtures(season_id):
     if not isinstance(items, list):
         return []
     done = [f for f in items if f.get("status") == 3]
-    if done:
-        logger.info(f"  Season {season_id}: {len(items)} total, {len(done)} finalizadas")
     return done
 
 
@@ -185,16 +243,13 @@ def send_to_server(fixtures, standings_by_season):
     }
 
     try:
-        r = requests.post(
-            f"{SERVER_URL}/webhook/ingest",
-            json=payload, timeout=60
-        )
+        r = requests.post(f"{SERVER_URL}/webhook/ingest", json=payload, timeout=60)
         if r.status_code == 200:
             d = r.json()
             logger.info(
-                f"✅ Servidor recebeu: +{d.get('new',0)} novas | "
+                f"✅ Servidor: +{d.get('new',0)} novas | "
                 f"{d.get('updated',0)} já existiam | "
-                f"{d.get('players',0)} players atualizados"
+                f"{d.get('players',0)} players"
             )
             return True
         logger.error(f"Webhook {r.status_code}: {r.text[:300]}")
@@ -207,11 +262,10 @@ def main():
     logger.info("=" * 55)
     logger.info("GT Scout Coletor — GitHub Actions")
     logger.info(f"Servidor: {SERVER_URL}")
-    logger.info(f"Sport ID: {SPORT_ID}")
     logger.info("=" * 55)
 
     known_ids  = get_known_ids()
-    season_ids = discover_seasons()
+    season_ids = discover_all_seasons()
 
     if not season_ids:
         logger.error("❌ Nenhuma season encontrada!")
@@ -219,23 +273,23 @@ def main():
 
     all_new        = []
     standings_by_s = {}
-    seasons_vazias = 0
+    novas_por_season = {}
 
     for sid in season_ids:
         fixtures = fetch_fixtures(sid)
-        new_fix  = [f for f in fixtures if str(f.get("id", "")) not in known_ids]
-
+        if not fixtures:
+            continue
+        new_fix = [f for f in fixtures if str(f.get("id", "")) not in known_ids]
         if new_fix:
-            logger.info(f"  → {len(new_fix)} novas para enviar (season {sid})")
+            novas_por_season[sid] = len(new_fix)
             all_new.extend(new_fix)
             standings_by_s[sid] = fetch_standings(sid)
-        else:
-            seasons_vazias += 1
 
-    logger.info(f"Resumo: {len(all_new)} partidas novas | {seasons_vazias} seasons sem novidade")
+    if novas_por_season:
+        logger.info(f"Partidas novas por season: {novas_por_season}")
+    logger.info(f"Total: {len(all_new)} partidas novas")
 
     ok = send_to_server(all_new, standings_by_s)
-
     if not ok and all_new:
         sys.exit(1)
 
