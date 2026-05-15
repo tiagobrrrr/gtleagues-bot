@@ -51,9 +51,14 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 }
 
 db.init_app(app)
-with app.app_context():
-    db.create_all()
-    logger.info("✅ Tabelas criadas/verificadas.")
+try:
+    with app.app_context():
+        db.create_all()
+        logger.info("✅ Tabelas criadas/verificadas.")
+except Exception as e:
+    logger.error(f"❌ Erro ao conectar ao banco: {e}")
+    logger.error(f"DATABASE_URL (parcial): {DB_URL[:60]}...")
+    raise
 
 # ── Serviços ───────────────────────────────────────────────────
 analyzer   = DataAnalyzer()
