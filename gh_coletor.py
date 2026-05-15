@@ -1,6 +1,8 @@
 """
 gh_coletor.py — GT Scout Bot / GitHub Actions
-Envia partidas em lotes de 200 para evitar timeout no Render (free tier).
+- Acorda o Render ANTES de qualquer coisa
+- Envia em lotes de 50 partidas com retry
+- Pausa entre lotes para o servidor processar
 """
 
 import os
@@ -26,7 +28,7 @@ SPORT_ID      = os.environ.get("GT_SPORT_ID", "6")
 
 API_BASE   = "https://api.gtleagues.com/api"
 TIMEOUT    = 20
-BATCH_SIZE = 200   # partidas por envio ao servidor
+BATCH_SIZE = 50    # menor para evitar timeout no Render free tier
 
 HEADERS = {
     "accept":           "application/json, text/plain, */*",
@@ -53,30 +55,35 @@ def _get(path, params=None):
         r = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
         if r.status_code == 200:
             return r.json()
-        if r.status_code != 404:
-            logger.debug(f"HTTP {r.status_code}: {path}")
-    except Exception as e:
-        logger.debug(f"Erro {path}: {e}")
+    except Exception:
+        pass
     return None
 
 
+# ── Acorda o Render ────────────────────────────────────────────
 def wake_server():
-    """Acorda o Render antes de enviar dados."""
-    logger.info("Acordando o servidor Render...")
-    for attempt in range(5):
+    """
+    Acorda o Render fazendo várias requisições leves até responder.
+    DEVE ser chamado antes de qualquer envio.
+    """
+    logger.info("Acordando o servidor Render (pode demorar ~30s)...")
+    for attempt in range(12):  # até 120s tentando
         try:
-            r = requests.get(f"{SERVER_URL}/api/status", timeout=30)
-            if r.status_code == 200:
-                logger.info(f"Servidor online. ({attempt+1} tentativa)")
+            r = requests.get(f"{SERVER_URL}/", timeout=20)
+            if r.status_code in (200, 302, 404):
+                logger.info(f"✅ Servidor online! ({attempt+1} tentativa, {attempt*10}s)")
+                # Aguarda mais 5s para garantir que está totalmente acordado
+                time.sleep(5)
                 return True
         except Exception:
             pass
-        logger.info(f"  Aguardando servidor... ({attempt+1}/5)")
+        logger.info(f"  Servidor dormindo... aguardando ({attempt+1}/12)")
         time.sleep(10)
-    logger.warning("Servidor pode estar dormindo — tentando mesmo assim.")
+    logger.warning("⚠️ Servidor não respondeu — tentando mesmo assim.")
     return False
 
 
+# ── Dados do servidor ──────────────────────────────────────────
 def get_known_ids():
     try:
         r = requests.get(f"{SERVER_URL}/api/known-ids", timeout=30)
@@ -102,6 +109,7 @@ def get_max_season_from_server():
     return None
 
 
+# ── Descoberta de seasons ──────────────────────────────────────
 def discover_seasons_from_api():
     found = set()
     for offset in [0, 200, 400]:
@@ -173,14 +181,14 @@ def discover_all_seasons():
         logger.info(f"Maior season no banco: {max_from_db}")
         all_seasons.add(str(max_from_db))
 
-    base = all_seasons.copy()
-    seq  = scan_sequential_seasons(base, range_before=20, range_after=300)
+    seq = scan_sequential_seasons(all_seasons.copy(), range_before=20, range_after=300)
     all_seasons |= seq
 
     logger.info(f"Total de seasons a verificar: {len(all_seasons)}")
     return list(all_seasons)
 
 
+# ── Coleta de partidas ─────────────────────────────────────────
 def fetch_fixtures(season_id):
     data = _get(f"/seasons/{season_id}/fixtures", {"limit": 1000, "offset": 0})
     if not data:
@@ -199,15 +207,16 @@ def fetch_standings(season_id):
     return items if isinstance(items, list) else []
 
 
-def send_batch(fixtures, standings_by_season, batch_num, total_batches):
-    """Envia um lote de partidas com retry automático."""
+# ── Envio em lotes ─────────────────────────────────────────────
+def send_batch(fixtures, standings_map, batch_num, total_batches):
+    """Envia um lote com retry. Retorna True se OK."""
+    sids = {str(f.get("seasonId") or "") for f in fixtures}
     all_standings = []
-    sids_in_batch = {str(f.get("seasonId") or "") for f in fixtures}
-    for sid in sids_in_batch:
-        for row in standings_by_season.get(sid, []):
-            row_copy = dict(row)
-            row_copy["_season_id"] = sid
-            all_standings.append(row_copy)
+    for sid in sids:
+        for row in standings_map.get(sid, []):
+            r = dict(row)
+            r["_season_id"] = sid
+            all_standings.append(r)
 
     payload = {
         "key":       WEBHOOK_KEY,
@@ -215,50 +224,60 @@ def send_batch(fixtures, standings_by_season, batch_num, total_batches):
         "standings": all_standings,
     }
 
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             r = requests.post(
                 f"{SERVER_URL}/webhook/ingest",
-                json=payload, timeout=90
+                json=payload, timeout=60
             )
             if r.status_code == 200:
                 d = r.json()
                 logger.info(
                     f"  Lote {batch_num}/{total_batches}: "
-                    f"+{d.get('new',0)} novas | {d.get('updated',0)} já existiam"
+                    f"+{d.get('new',0)} salvas | {d.get('updated',0)} já existiam"
                 )
                 return True
-            logger.warning(f"  Lote {batch_num} tentativa {attempt+1}: HTTP {r.status_code}")
+
+            if r.status_code in (502, 503, 504):
+                logger.warning(f"  Lote {batch_num} tentativa {attempt+1}: servidor dormindo ({r.status_code}) — acordando...")
+                wake_server()
+            else:
+                logger.warning(f"  Lote {batch_num} tentativa {attempt+1}: HTTP {r.status_code}")
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"  Lote {batch_num} tentativa {attempt+1}: timeout")
         except Exception as e:
             logger.warning(f"  Lote {batch_num} tentativa {attempt+1}: {e}")
-        time.sleep(5 * (attempt + 1))
 
-    logger.error(f"  Lote {batch_num} FALHOU após 3 tentativas.")
+        time.sleep(8 * (attempt + 1))
+
+    logger.error(f"  ❌ Lote {batch_num} FALHOU após 4 tentativas")
     return False
 
 
+# ── Main ───────────────────────────────────────────────────────
 def main():
     logger.info("=" * 55)
     logger.info("GT Scout Coletor — GitHub Actions")
     logger.info(f"Servidor: {SERVER_URL}")
-    logger.info(f"Lote: {BATCH_SIZE} partidas por envio")
+    logger.info(f"Lote: {BATCH_SIZE} partidas | BATCH_SIZE configurável")
     logger.info("=" * 55)
 
-    # 1. Acorda o servidor
+    # PASSO 1: acorda o servidor ANTES de qualquer coisa
     wake_server()
 
-    # 2. Busca IDs conhecidos
+    # PASSO 2: busca IDs conhecidos (servidor já acordado)
     known_ids = get_known_ids()
 
-    # 3. Descobre seasons
+    # PASSO 3: descobre seasons
     season_ids = discover_all_seasons()
     if not season_ids:
         logger.error("Nenhuma season encontrada!")
         sys.exit(1)
 
-    # 4. Coleta partidas novas
+    # PASSO 4: coleta partidas novas
     all_new        = []
-    standings_by_s = {}
+    standings_map  = {}
     novas_por_s    = {}
 
     for sid in season_ids:
@@ -269,37 +288,38 @@ def main():
         if new_fix:
             novas_por_s[sid] = len(new_fix)
             all_new.extend(new_fix)
-            standings_by_s[sid] = fetch_standings(sid)
+            standings_map[sid] = fetch_standings(sid)
 
-    if novas_por_s:
-        top = sorted(novas_por_s.items(), key=lambda x: x[1], reverse=True)[:10]
-        logger.info(f"Top seasons com novas partidas: {top}")
-    logger.info(f"Total: {len(all_new)} partidas novas para enviar")
+    top = sorted(novas_por_s.items(), key=lambda x: x[1], reverse=True)[:5]
+    logger.info(f"Top seasons: {top}")
+    logger.info(f"Total: {len(all_new)} partidas novas")
 
     if not all_new:
         logger.info("Nada novo. Concluído.")
         return
 
-    # 5. Envia em lotes de BATCH_SIZE
-    batches = [all_new[i:i+BATCH_SIZE] for i in range(0, len(all_new), BATCH_SIZE)]
-    total   = len(batches)
-    logger.info(f"Enviando em {total} lote(s) de até {BATCH_SIZE} partidas...")
+    # PASSO 5: envia em lotes pequenos
+    batches      = [all_new[i:i+BATCH_SIZE] for i in range(0, len(all_new), BATCH_SIZE)]
+    total_batches = len(batches)
+    logger.info(f"Enviando {total_batches} lote(s) de até {BATCH_SIZE} partidas...")
 
     failed = 0
+    total_saved = 0
+
     for i, batch in enumerate(batches, 1):
-        ok = send_batch(batch, standings_by_s, i, total)
-        if not ok:
+        ok = send_batch(batch, standings_map, i, total_batches)
+        if ok:
+            total_saved += len(batch)
+        else:
             failed += 1
-        # Pequena pausa entre lotes para não sobrecarregar
-        if i < total:
-            time.sleep(2)
+        # Pausa entre lotes para o Render processar
+        if i < total_batches:
+            time.sleep(3)
 
+    logger.info(f"✅ Concluído! {total_saved} partidas enviadas em {total_batches} lote(s).")
     if failed:
-        logger.error(f"{failed} lote(s) falharam!")
+        logger.error(f"❌ {failed} lote(s) falharam!")
         sys.exit(1)
-
-    total_enviado = len(all_new)
-    logger.info(f"✅ Concluído! {total_enviado} partidas enviadas em {total} lote(s).")
 
 
 if __name__ == "__main__":
