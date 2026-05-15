@@ -39,6 +39,10 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
 # ── Banco ──────────────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
+# Se ainda estiver apontando para o Neon antigo, usa Supabase
+if "neon.tech" in DB_URL:
+    DB_URL = os.getenv("SUPABASE_URL", DB_URL)
+    logger.warning(f"⚠️ DATABASE_URL aponta para Neon — verifique as env vars do Render!")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
 if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
     DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
