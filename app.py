@@ -42,17 +42,12 @@ DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
 if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
     DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
-# Força IPv4 e SSL para Supabase (evita erro de IPv6 no Render)
-if "supabase" in DB_URL and "sslmode" not in DB_URL:
-    sep = "&" if "?" in DB_URL else "?"
-    DB_URL += f"{sep}sslmode=require"
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_pre_ping": True,
     "pool_recycle":  300,
-    "connect_args":  {"sslmode": "require"},
 }
 
 db.init_app(app)
