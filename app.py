@@ -1,9 +1,3 @@
-"""
-app.py — GT Scout Bot
-Flask slim: apenas rotas, scheduler e inicialização.
-Lógica de negócio nos módulos especializados (padrão fifa25-bot).
-"""
-
 import os
 import io
 import json
@@ -28,24 +22,16 @@ logger = logging.getLogger(__name__)
 
 BR_TZ = pytz.timezone("America/Sao_Paulo")
 
-
 def now_br():
     return datetime.now(BR_TZ)
 
-
-# ── App ────────────────────────────────────────────────────────
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco ──────────────────────────────────────────────────────
-# Supabase como banco principal — ignora qualquer URL antiga do Neon
-_SUPABASE = "postgresql+psycopg://postgres.mjzewvqnonnaqfpaktyk:VdqK3g3RpMP0K2Pp@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
-_ENV_URL  = os.getenv("DATABASE_URL", "")
-DB_URL = _ENV_URL if (_ENV_URL and "neon.tech" not in _ENV_URL and "sqlite" not in _ENV_URL) else _SUPABASE
-logger.info(f"Banco: {'Supabase' if 'supabase' in DB_URL else 'custom'}")
-DB_URL = DB_URL.replace("postgres://", "postgresql://")
-if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
-    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
+# ── Banco — Supabase (sa-east-1) ──────────────────────────────
+# URL hardcoded para ignorar qualquer variável antiga do Neon no Render
+DB_URL = "postgresql+psycopg://postgres.mjzewvqnonnaqfpaktyk:VdqK3g3RpMP0K2Pp@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
+logger.info(f"Conectando ao Supabase sa-east-1...")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -58,10 +44,9 @@ db.init_app(app)
 try:
     with app.app_context():
         db.create_all()
-        logger.info("✅ Tabelas criadas/verificadas.")
+        logger.info("✅ Tabelas criadas/verificadas no Supabase.")
 except Exception as e:
-    logger.error(f"❌ Erro ao conectar ao banco: {e}")
-    logger.error(f"DATABASE_URL (parcial): {DB_URL[:60]}...")
+    logger.error(f"❌ Erro ao conectar: {e}")
     raise
 
 # ── Serviços ───────────────────────────────────────────────────
@@ -78,7 +63,6 @@ DAY_NAMES   = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
 
-
 def weekly_email_job():
     with app.app_context():
         xlsx, fname = reporter.generate_weekly_report()
@@ -86,13 +70,11 @@ def weekly_email_job():
         ok    = email_svc.send_report(xlsx, fname, total)
         logger.info(f"Email semanal {'✅ enviado' if ok else '❌ FALHOU'}.")
 
-
 scheduler.add_job(weekly_email_job, "cron",
                   day_of_week=DAY_NAMES[weekly_day],
                   hour=weekly_hour, minute=0, id="weekly_email")
 scheduler.start()
 logger.info(f"✅ Scheduler iniciado. Coleta via GitHub Actions a cada {INTERVAL} min.")
-
 
 # ── Rotas ──────────────────────────────────────────────────────
 @app.route("/")
@@ -101,7 +83,6 @@ def index():
     recent  = Match.query.filter(Match.home_score.isnot(None)) \
                          .order_by(Match.kickoff.desc()).limit(12).all()
     return render_template("index.html", summary=summary, recent=recent, now=now_br())
-
 
 @app.route("/matches")
 def matches():
@@ -114,7 +95,6 @@ def matches():
     seasons = [r[0] for r in db.session.query(Match.season_id).distinct().all() if r[0]]
     return render_template("matches.html", pagination=pagination, seasons=seasons, selected=season)
 
-
 @app.route("/scheduled")
 def scheduled():
     results = []
@@ -126,18 +106,14 @@ def scheduled():
     results.sort(key=lambda x: x.get("kickoff") or "")
     return render_template("scheduled.html", matches=results, now=now_br())
 
-
 @app.route("/statistics")
 def statistics():
-    stats = analyzer.avg_goals_individual()
-    return render_template("statistics.html", stats=stats)
-
+    return render_template("statistics.html", stats=analyzer.avg_goals_individual())
 
 @app.route("/players")
 def players():
     all_players = Player.query.order_by(Player.nickname).all()
     return render_template("players.html", players=all_players, total=len(all_players))
-
 
 @app.route("/head-to-head")
 def head_to_head():
@@ -147,14 +123,12 @@ def head_to_head():
     result = analyzer.h2h_stats(p1, p2) if (p1 and p2 and p1 != p2) else None
     return render_template("head_to_head.html", nicknames=nicknames, p1=p1, p2=p2, result=result)
 
-
 @app.route("/charts")
 def charts():
     stats = analyzer.avg_goals_individual()
     return render_template("charts.html", stats=stats,
                            stats_json=json.dumps(stats),
                            nicknames=[s["nickname"] for s in stats])
-
 
 @app.route("/reports")
 def reports():
@@ -167,37 +141,27 @@ def reports():
                            summary      = dash["summary"],
                            goals_sum    = dash["goals_summary"])
 
-
 # ── Downloads ──────────────────────────────────────────────────
 @app.route("/download/excel/reports")
 def download_excel_reports():
     xlsx, fname = reporter.generate_weekly_report()
-    if not xlsx:
-        return "Nenhuma partida coletada.", 404
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
-
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
     xlsx, fname = reporter.generate_stats_report()
-    if not xlsx:
-        return "Sem dados.", 404
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
-
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
     xlsx, fname = reporter.generate_charts_report()
-    if not xlsx:
-        return "Sem dados.", 404
     return send_file(io.BytesIO(xlsx),
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
-
 
 @app.route("/download/excel/h2h")
 def download_excel_h2h():
@@ -213,11 +177,9 @@ def download_excel_h2h():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
-
 @app.route("/download/excel")
 def download_excel():
     return redirect(url_for("download_excel_reports"))
-
 
 # ── API ────────────────────────────────────────────────────────
 @app.route("/api/status")
@@ -225,6 +187,7 @@ def api_status():
     jobs = {job.id: str(job.next_run_time) for job in scheduler.get_jobs()}
     return jsonify({
         "status":            "ok",
+        "db":                "Supabase sa-east-1",
         "coleta":            "GitHub Actions (gh_coletor.py)",
         "interval_minutes":  INTERVAL,
         "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
@@ -233,27 +196,22 @@ def api_status():
         "last_scrape":       get_last_diag(),
     })
 
-
 @app.route("/api/stats")
 def api_stats():
     return jsonify(analyzer.avg_goals_individual())
 
-
 @app.route("/api/dashboard")
 def api_dashboard():
     return jsonify(reporter.get_dashboard_data())
-
 
 @app.route("/api/known-ids")
 def known_ids():
     ids = [r[0] for r in db.session.query(Match.match_id).all()]
     return jsonify({"ids": ids, "total": len(ids)})
 
-
 @app.route("/api/summary")
 def api_summary():
     return jsonify(analyzer.get_summary())
-
 
 @app.route("/webhook/ingest", methods=["POST"])
 def webhook_ingest():
@@ -286,7 +244,6 @@ def webhook_ingest():
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
-
 @app.route("/send-email", methods=["POST"])
 def send_email_now():
     xlsx, fname = reporter.generate_weekly_report()
@@ -294,27 +251,17 @@ def send_email_now():
     ok    = email_svc.send_report(xlsx, fname, total)
     return jsonify({"ok": ok, "matches": total})
 
-
 @app.route("/diagnostico")
 def diagnostico():
     return jsonify({
         "bot":              "GT Scout",
+        "db":               "Supabase sa-east-1",
         "coleta":           "GitHub Actions (gh_coletor.py — a cada 15 min)",
         "db_matches":       Match.query.count(),
         "interval_minutes": INTERVAL,
         "last_scrape":      get_last_diag(),
         "season_ids":       os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
-        "modulos": [
-            "data_analyzer.py",
-            "statistics_calculator.py",
-            "report_generator.py",
-            "email_service.py",
-            "excel_exporter.py",
-            "web_scraper.py",
-            "gh_coletor.py",
-        ]
     })
-
 
 if __name__ == "__main__":
     with app.app_context():
