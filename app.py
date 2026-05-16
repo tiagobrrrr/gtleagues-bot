@@ -1,7 +1,4 @@
-import os
-import io
-import json
-import logging
+import os, io, json, logging, socket
 from datetime import datetime
 
 import pytz
@@ -19,7 +16,6 @@ from email_service import EmailService
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 BR_TZ = pytz.timezone("America/Sao_Paulo")
 
 def now_br():
@@ -28,17 +24,26 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco — Supabase (sa-east-1) ──────────────────────────────
-# URL hardcoded para ignorar qualquer variável antiga do Neon no Render
-DB_URL = "postgresql+psycopg://postgres.mjzewvqnonnaqfpaktyk:VdqK3g3RpMP0K2Pp@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
-logger.info(f"Conectando ao Supabase sa-east-1...")
+# ── Banco: Supabase com IPv4 forçado ──────────────────────────
+def _supabase_url():
+    host = "db.mjzewvqnonnaqfpaktyk.supabase.co"
+    pwd  = "VdqK3g3RpMP0K2Pp"
+    try:
+        # Resolve somente endereços IPv4
+        results = socket.getaddrinfo(host, 5432, socket.AF_INET)
+        ipv4 = results[0][4][0]
+        logger.info(f"Supabase IPv4: {ipv4}")
+        return f"postgresql+psycopg://postgres:{pwd}@{ipv4}:5432/postgres?sslmode=require&sslrootcert=none"
+    except Exception as e:
+        logger.warning(f"DNS fallback para hostname direto: {e}")
+        return f"postgresql+psycopg://postgres:{pwd}@{host}:5432/postgres?sslmode=require"
+
+DB_URL = _supabase_url()
+logger.info("Conectando ao Supabase (IPv4)...")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_pre_ping": True,
-    "pool_recycle":  300,
-}
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True, "pool_recycle": 300}
 
 db.init_app(app)
 try:
@@ -49,17 +54,15 @@ except Exception as e:
     logger.error(f"❌ Erro ao conectar: {e}")
     raise
 
-# ── Serviços ───────────────────────────────────────────────────
 analyzer   = DataAnalyzer()
 calculator = StatisticsCalculator()
 reporter   = ReportGenerator()
 email_svc  = EmailService()
 
-# ── Scheduler ─────────────────────────────────────────────────
 INTERVAL    = int(os.getenv("SCRAPER_INTERVAL_MINUTES", 15))
 weekly_day  = int(os.getenv("EMAIL_WEEKLY_DAY", 0))
 weekly_hour = int(os.getenv("EMAIL_WEEKLY_HOUR", 8))
-DAY_NAMES   = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+DAY_NAMES   = ["mon","tue","wed","thu","fri","sat","sun"]
 
 scheduler = BackgroundScheduler(timezone="America/Sao_Paulo")
 
@@ -67,21 +70,18 @@ def weekly_email_job():
     with app.app_context():
         xlsx, fname = reporter.generate_weekly_report()
         total = Match.query.filter(Match.home_score.isnot(None)).count()
-        ok    = email_svc.send_report(xlsx, fname, total)
-        logger.info(f"Email semanal {'✅ enviado' if ok else '❌ FALHOU'}.")
+        ok = email_svc.send_report(xlsx, fname, total)
+        logger.info(f"Email semanal {'✅' if ok else '❌'}.")
 
 scheduler.add_job(weekly_email_job, "cron",
                   day_of_week=DAY_NAMES[weekly_day],
                   hour=weekly_hour, minute=0, id="weekly_email")
 scheduler.start()
-logger.info(f"✅ Scheduler iniciado. Coleta via GitHub Actions a cada {INTERVAL} min.")
 
-# ── Rotas ──────────────────────────────────────────────────────
 @app.route("/")
 def index():
     summary = analyzer.get_summary()
-    recent  = Match.query.filter(Match.home_score.isnot(None)) \
-                         .order_by(Match.kickoff.desc()).limit(12).all()
+    recent  = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).limit(12).all()
     return render_template("index.html", summary=summary, recent=recent, now=now_br())
 
 @app.route("/matches")
@@ -101,8 +101,7 @@ def scheduled():
     for sid in get_season_ids():
         for raw in fetch_scheduled(sid):
             p = parse_match(raw)
-            if p:
-                results.append(p)
+            if p: results.append(p)
     results.sort(key=lambda x: x.get("kickoff") or "")
     return render_template("scheduled.html", matches=results, now=now_br())
 
@@ -126,41 +125,33 @@ def head_to_head():
 @app.route("/charts")
 def charts():
     stats = analyzer.avg_goals_individual()
-    return render_template("charts.html", stats=stats,
-                           stats_json=json.dumps(stats),
+    return render_template("charts.html", stats=stats, stats_json=json.dumps(stats),
                            nicknames=[s["nickname"] for s in stats])
 
 @app.route("/reports")
 def reports():
     dash = reporter.get_dashboard_data()
-    return render_template("reports.html",
-                           top_scorers  = dash["top_scorers"],
-                           most_games   = dash["most_active"],
-                           biggest_wins = dash["biggest_wins"],
-                           high_scoring = dash["high_scoring"],
-                           summary      = dash["summary"],
-                           goals_sum    = dash["goals_summary"])
+    return render_template("reports.html", top_scorers=dash["top_scorers"],
+                           most_games=dash["most_active"], biggest_wins=dash["biggest_wins"],
+                           high_scoring=dash["high_scoring"], summary=dash["summary"],
+                           goals_sum=dash["goals_summary"])
 
-# ── Downloads ──────────────────────────────────────────────────
 @app.route("/download/excel/reports")
 def download_excel_reports():
     xlsx, fname = reporter.generate_weekly_report()
-    return send_file(io.BytesIO(xlsx),
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
     xlsx, fname = reporter.generate_stats_report()
-    return send_file(io.BytesIO(xlsx),
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
     xlsx, fname = reporter.generate_charts_report()
-    return send_file(io.BytesIO(xlsx),
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 @app.route("/download/excel/h2h")
@@ -173,28 +164,19 @@ def download_excel_h2h():
     if not result:
         return "Nenhum confronto encontrado.", 404
     xlsx, fname = result
-    return send_file(io.BytesIO(xlsx),
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
 
 @app.route("/download/excel")
 def download_excel():
     return redirect(url_for("download_excel_reports"))
 
-# ── API ────────────────────────────────────────────────────────
 @app.route("/api/status")
 def api_status():
     jobs = {job.id: str(job.next_run_time) for job in scheduler.get_jobs()}
-    return jsonify({
-        "status":            "ok",
-        "db":                "Supabase sa-east-1",
-        "coleta":            "GitHub Actions (gh_coletor.py)",
-        "interval_minutes":  INTERVAL,
-        "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
-        "total_db":          Match.query.count(),
-        "scheduler":         jobs,
-        "last_scrape":       get_last_diag(),
-    })
+    return jsonify({"status": "ok", "db": "Supabase", "coleta": "GitHub Actions",
+                    "matches_finalized": Match.query.filter(Match.home_score.isnot(None)).count(),
+                    "total_db": Match.query.count(), "scheduler": jobs, "last_scrape": get_last_diag()})
 
 @app.route("/api/stats")
 def api_stats():
@@ -221,24 +203,19 @@ def webhook_ingest():
         return jsonify({"error": "JSON inválido"}), 400
     if data.get("key") != os.getenv("WEBHOOK_KEY", "gtscout-webhook-2026"):
         return jsonify({"error": "Chave inválida"}), 403
-
     known_ids_set = set(r[0] for r in db.session.query(Match.match_id).all())
     new_ct = upd_ct = play_ct = 0
-
     for raw in data.get("fixtures", []):
         parsed = parse_match(raw)
         if parsed:
             if upsert_match(parsed, known_ids_set): new_ct += 1
             else: upd_ct += 1
-
     for raw_p in data.get("standings", []):
         sid = raw_p.pop("_season_id", "unknown")
         upsert_stats(raw_p, sid)
         play_ct += 1
-
     try:
         db.session.commit()
-        logger.info(f"[Webhook] ✅ +{new_ct} novas | {upd_ct} já existiam | {play_ct} players")
         return jsonify({"ok": True, "new": new_ct, "updated": upd_ct, "players": play_ct})
     except Exception as e:
         db.session.rollback()
@@ -248,24 +225,15 @@ def webhook_ingest():
 def send_email_now():
     xlsx, fname = reporter.generate_weekly_report()
     total = Match.query.filter(Match.home_score.isnot(None)).count()
-    ok    = email_svc.send_report(xlsx, fname, total)
+    ok = email_svc.send_report(xlsx, fname, total)
     return jsonify({"ok": ok, "matches": total})
 
 @app.route("/diagnostico")
 def diagnostico():
-    return jsonify({
-        "bot":              "GT Scout",
-        "db":               "Supabase sa-east-1",
-        "coleta":           "GitHub Actions (gh_coletor.py — a cada 15 min)",
-        "db_matches":       Match.query.count(),
-        "interval_minutes": INTERVAL,
-        "last_scrape":      get_last_diag(),
-        "season_ids":       os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO"),
-    })
+    return jsonify({"bot": "GT Scout", "db": "Supabase", "db_matches": Match.query.count(),
+                    "last_scrape": get_last_diag(), "season_ids": os.getenv("GT_SEASON_IDS", "NÃO CONFIGURADO")})
 
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    port  = int(os.getenv("PORT", os.getenv("FLASK_PORT", 5000)))
-    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
