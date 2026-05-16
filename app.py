@@ -38,11 +38,11 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
 # ── Banco ──────────────────────────────────────────────────────
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
-# Se ainda estiver apontando para o Neon antigo, usa Supabase
-if "neon.tech" in DB_URL:
-    DB_URL = os.getenv("SUPABASE_URL", DB_URL)
-    logger.warning(f"⚠️ DATABASE_URL aponta para Neon — verifique as env vars do Render!")
+# Supabase como banco principal — ignora qualquer URL antiga do Neon
+_SUPABASE = "postgresql+psycopg://postgres.mjzewvqnonnaqfpaktyk:VdqK3g3RpMP0K2Pp@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
+_ENV_URL  = os.getenv("DATABASE_URL", "")
+DB_URL = _ENV_URL if (_ENV_URL and "neon.tech" not in _ENV_URL and "sqlite" not in _ENV_URL) else _SUPABASE
+logger.info(f"Banco: {'Supabase' if 'supabase' in DB_URL else 'custom'}")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
 if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
     DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
