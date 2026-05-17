@@ -24,22 +24,9 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco: Supabase com IPv4 forçado ──────────────────────────
-def _supabase_url():
-    host = "db.mjzewvqnonnaqfpaktyk.supabase.co"
-    pwd  = "VdqK3g3RpMP0K2Pp"
-    try:
-        # Resolve somente endereços IPv4
-        results = socket.getaddrinfo(host, 5432, socket.AF_INET)
-        ipv4 = results[0][4][0]
-        logger.info(f"Supabase IPv4: {ipv4}")
-        return f"postgresql+psycopg://postgres:{pwd}@{ipv4}:5432/postgres?sslmode=require&sslrootcert=none"
-    except Exception as e:
-        logger.warning(f"DNS fallback para hostname direto: {e}")
-        return f"postgresql+psycopg://postgres:{pwd}@{host}:5432/postgres?sslmode=require"
-
-DB_URL = _supabase_url()
-logger.info("Conectando ao Supabase (IPv4)...")
+# ── Banco: Supabase via psycopg2 (IPv4/IPv6 nativo) ──────────
+DB_URL = "postgresql+psycopg2://postgres:VdqK3g3RpMP0K2Pp@db.mjzewvqnonnaqfpaktyk.supabase.co:5432/postgres?sslmode=require"
+logger.info("Conectando ao Supabase via psycopg2...")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
