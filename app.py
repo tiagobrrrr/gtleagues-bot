@@ -24,9 +24,12 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco: Supabase via psycopg2 (IPv4/IPv6 nativo) ──────────
-DB_URL = "postgresql+psycopg2://postgres:VdqK3g3RpMP0K2Pp@db.mjzewvqnonnaqfpaktyk.supabase.co:5432/postgres?sslmode=require"
-logger.info("Conectando ao Supabase via psycopg2...")
+# ── Banco: lê da env DATABASE_URL ────────────────────────────
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
+DB_URL = DB_URL.replace("postgres://", "postgresql://")
+if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://")
+logger.info(f"Banco configurado.")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False

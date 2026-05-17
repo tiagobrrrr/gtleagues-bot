@@ -3,7 +3,7 @@ apscheduler==3.10.4
 python-dotenv==1.0.1
 flask-sqlalchemy==3.1.1
 sqlalchemy==2.0.36
-psycopg2-binary==2.9.9
+psycopg[binary]==3.2.13
 openpyxl==3.1.2
 gunicorn==21.2.0
 pytz==2026.1.post1
