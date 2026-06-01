@@ -2,7 +2,12 @@
 {% block title %}Confrontos — GT Scout{% endblock %}
 
 {% block content %}
-<h1 class="page-title">⚔️ Confronto Direto (Head-to-Head)</h1>
+<div class="flex items-center justify-between mb-2">
+  <h1 class="page-title">⚔️ Confronto Direto (Head-to-Head)</h1>
+  <a href="/download/excel/all-h2h" class="btn btn-green">
+    ⬇ Baixar Todos os Confrontos
+  </a>
+</div>
 
 <!-- Formulário de seleção -->
 <div class="card mb-2">
@@ -27,8 +32,15 @@
       </select>
     </div>
     <div style="padding-top:1.2rem;">
-      <button type="submit" class="btn btn-green">Ver Confrontos</button>
+      <button type="submit" class="btn btn-blue">🔍 Ver Confrontos</button>
     </div>
+    {% if p1 and p2 and result and result.total > 0 %}
+    <div style="padding-top:1.2rem;">
+      <a href="/download/excel/h2h?p1={{ p1|urlencode }}&p2={{ p2|urlencode }}" class="btn btn-green">
+        ⬇ Baixar {{ p1 }} vs {{ p2 }}
+      </a>
+    </div>
+    {% endif %}
   </form>
 </div>
 
@@ -81,15 +93,16 @@
   </div>
 </div>
 
-<!-- Botão download -->
+<!-- Tabela de confrontos -->
 <div class="flex justify-between items-center mb-1">
-  <h2 class="section-title" style="margin-bottom:0;">Histórico de Confrontos</h2>
+  <h2 class="section-title" style="margin-bottom:0;">
+    Histórico — {{ result.total }} confronto(s)
+  </h2>
   <a href="/download/excel/h2h?p1={{ p1|urlencode }}&p2={{ p2|urlencode }}" class="btn btn-green">
-    ⬇ Baixar Planilha dos Confrontos
+    ⬇ Baixar {{ p1 }} vs {{ p2 }}
   </a>
 </div>
 
-<!-- Tabela de confrontos -->
 <div class="tbl-wrap">
   <table>
     <thead>

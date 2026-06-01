@@ -126,23 +126,38 @@ def reports():
                            high_scoring=dash["high_scoring"], summary=dash["summary"],
                            goals_sum=dash["goals_summary"])
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+def _xlsx_response(xlsx: bytes, fname: str):
+    return send_file(io.BytesIO(xlsx), mimetype=XLSX_MIME,
+                     as_attachment=True, download_name=fname)
+
 @app.route("/download/excel/reports")
 def download_excel_reports():
-    xlsx, fname = reporter.generate_weekly_report()
-    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     as_attachment=True, download_name=fname)
+    try:
+        xlsx, fname = reporter.generate_weekly_report()
+        return _xlsx_response(xlsx, fname)
+    except Exception as e:
+        logger.error(f"Erro download reports: {e}")
+        return f"Erro ao gerar planilha: {e}", 500
 
 @app.route("/download/excel/stats")
 def download_excel_stats():
-    xlsx, fname = reporter.generate_stats_report()
-    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     as_attachment=True, download_name=fname)
+    try:
+        xlsx, fname = reporter.generate_stats_report()
+        return _xlsx_response(xlsx, fname)
+    except Exception as e:
+        logger.error(f"Erro download stats: {e}")
+        return f"Erro ao gerar planilha: {e}", 500
 
 @app.route("/download/excel/charts")
 def download_excel_charts():
-    xlsx, fname = reporter.generate_charts_report()
-    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     as_attachment=True, download_name=fname)
+    try:
+        xlsx, fname = reporter.generate_charts_report()
+        return _xlsx_response(xlsx, fname)
+    except Exception as e:
+        logger.error(f"Erro download charts: {e}")
+        return f"Erro ao gerar planilha: {e}", 500
 
 @app.route("/download/excel/h2h")
 def download_excel_h2h():
@@ -150,12 +165,28 @@ def download_excel_h2h():
     p2 = request.args.get("p2", "")
     if not p1 or not p2:
         return redirect(url_for("head_to_head"))
-    result = reporter.generate_h2h_report(p1, p2)
-    if not result:
-        return "Nenhum confronto encontrado.", 404
-    xlsx, fname = result
-    return send_file(io.BytesIO(xlsx), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    try:
+        result = reporter.generate_h2h_report(p1, p2)
+        if not result:
+            return "Nenhum confronto encontrado.", 404
+        xlsx, fname = result
+        return _xlsx_response(xlsx, fname)
+    except Exception as e:
+        logger.error(f"Erro download h2h: {e}")
+        return f"Erro ao gerar planilha: {e}", 500
+
+@app.route("/download/excel/all-h2h")
+def download_excel_all_h2h():
+    """Download de TODOS os confrontos sem precisar selecionar player."""
+    matches = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).all()
+    if not matches:
+        return "Nenhuma partida coletada.", 404
+    xlsx  = build_excel_all_h2h(matches)
+    fname = f"gtscout_todos_confrontos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+    return send_file(io.BytesIO(xlsx),
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name=fname)
+
 
 @app.route("/download/excel")
 def download_excel():
