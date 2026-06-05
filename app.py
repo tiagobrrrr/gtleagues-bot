@@ -12,6 +12,11 @@ from data_analyzer import DataAnalyzer
 from statistics_calculator import StatisticsCalculator
 from report_generator import ReportGenerator
 from email_service import EmailService
+from excel_exporter import (
+    build_excel_reports, build_excel_stats,
+    build_excel_h2h, build_excel_charts,
+    build_excel_all_h2h
+)
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -139,7 +144,6 @@ def download_excel_reports():
         matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).limit(3000).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
-        from excel_exporter import build_excel_reports
         xlsx  = build_excel_reports(matches)
         fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
         return _xlsx_response(xlsx, fname)
