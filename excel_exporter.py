@@ -81,63 +81,32 @@ def _cell(ws, row, col, value, fill, font, align=None):
 # 1. Relatório de partidas
 # ──────────────────────────────────────────────────────────────
 def build_excel_reports(matches) -> bytes:
-    """Planilha com partidas coletadas (finalizadas)."""
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Partidas Coletadas"
+    """Planilha com partidas coletadas — versão otimizada (write_only)."""
+    from openpyxl import Workbook as WB
+    wb = WB(write_only=True)
+    ws = wb.create_sheet("Partidas Coletadas")
 
-    headers = [
-        "#", "Data", "Semana", "Temporada",
-        "Player Casa", "Gols Casa",
-        "Gols Visitante", "Player Visitante",
-        "Resultado"
-    ]
-    widths = [5, 18, 7, 28, 18, 11, 11, 18, 22]
-    _header_row(ws, headers, widths)
+    # Cabeçalho
+    headers = ["#", "Data", "Semana", "Temporada",
+               "Player Casa", "Gols Casa", "Gols Visit.", "Player Visitante", "Resultado"]
+    ws.append(headers)
 
-    for ri, m in enumerate(matches, 2):
+    for i, m in enumerate(matches, 1):
         hs, as_ = m.home_score, m.away_score
-        fill = _frow(ri)
-
         if hs is None or as_ is None:
-            result_str = "—"
-            fh = fa = fill; fnh = fna = FONT_MUTED
+            res = "—"
         elif hs > as_:
-            result_str = f"{m.home_nickname} venceu"
-            fh, fnh = FILL_WIN, FONT_WIN
-            fa, fna = FILL_LOSE, FONT_LOSE
+            res = f"{m.home_nickname} venceu"
         elif hs < as_:
-            result_str = f"{m.away_nickname} venceu"
-            fh, fnh = FILL_LOSE, FONT_LOSE
-            fa, fna = FILL_WIN, FONT_WIN
+            res = f"{m.away_nickname} venceu"
         else:
-            result_str = "Empate"
-            fh = fa = FILL_DRAW; fnh = fna = FONT_DRAW
-
+            res = "Empate"
         kickoff = (m.kickoff or "")[:16].replace("T", " ")
-
-        row = [
-            ri - 1, kickoff, m.week or "", m.season_name or "",
+        ws.append([
+            i, kickoff, m.week or "", m.season_name or "",
             m.home_nickname or "", hs if hs is not None else "",
-            as_ if as_ is not None else "", m.away_nickname or "",
-            result_str
-        ]
-
-        for ci, val in enumerate(row, 1):
-            if ci == 5:
-                _cell(ws, ri, ci, val, fh, fnh)
-            elif ci == 8:
-                _cell(ws, ri, ci, val, fa, fna)
-            elif ci == 9:
-                if "venceu" in result_str:
-                    _cell(ws, ri, ci, val, FILL_WIN, FONT_WIN)
-                elif result_str == "Empate":
-                    _cell(ws, ri, ci, val, FILL_DRAW, FONT_DRAW)
-                else:
-                    _cell(ws, ri, ci, val, fill, FONT_MUTED)
-            else:
-                _cell(ws, ri, ci, val, fill, FONT_MUTED if ci in (1, 2, 3) else FONT_NORMAL)
-        ws.row_dimensions[ri].height = 20
+            as_ if as_ is not None else "", m.away_nickname or "", res
+        ])
 
     return _to_bytes(wb)
 
@@ -387,64 +356,28 @@ def send_excel_email(matches, recipient: str = None):
 # 5. Todos os confrontos (H2H completo — sem filtro de player)
 # ──────────────────────────────────────────────────────────────
 def build_excel_all_h2h(matches_list) -> bytes:
-    """
-    Planilha com todos os confrontos de todos os players.
-    Cada linha é uma partida com os dois players, placar e vencedor.
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Todos os Confrontos"
+    """Planilha com todos os confrontos — versão otimizada (write_only)."""
+    from openpyxl import Workbook as WB
+    wb = WB(write_only=True)
+    ws = wb.create_sheet("Todos os Confrontos")
+    ws.append(["#", "Data", "Temporada", "Player Casa", "Gols Casa",
+               "Gols Visit.", "Player Visitante", "Vencedor"])
 
-    headers = [
-        "#", "Data", "Temporada",
-        "Player Casa", "Gols Casa",
-        "Gols Visit.", "Player Visitante",
-        "Vencedor"
-    ]
-    widths = [5, 18, 28, 18, 11, 11, 18, 22]
-    _header_row(ws, headers, widths)
-
-    for ri, m in enumerate(matches_list, 2):
+    for i, m in enumerate(matches_list, 1):
         hs, as_ = m.home_score, m.away_score
-        fill = _frow(ri)
-
         if hs is None or as_ is None:
-            result_str = "—"
-            fh = fa = fill; fnh = fna = FONT_MUTED
+            res = "—"
         elif hs > as_:
-            result_str = m.home_nickname
-            fh, fnh = FILL_WIN, FONT_WIN
-            fa, fna = FILL_LOSE, FONT_LOSE
+            res = m.home_nickname or "Casa"
         elif hs < as_:
-            result_str = m.away_nickname
-            fh, fnh = FILL_LOSE, FONT_LOSE
-            fa, fna = FILL_WIN, FONT_WIN
+            res = m.away_nickname or "Visit."
         else:
-            result_str = "Empate"
-            fh = fa = FILL_DRAW; fnh = fna = FONT_DRAW
-
+            res = "Empate"
         kickoff = (m.kickoff or "")[:16].replace("T", " ")
-        row = [
-            ri - 1, kickoff, m.season_name or "",
+        ws.append([
+            i, kickoff, m.season_name or "",
             m.home_nickname or "", hs if hs is not None else "",
-            as_ if as_ is not None else "", m.away_nickname or "",
-            result_str
-        ]
-
-        for ci, val in enumerate(row, 1):
-            if ci == 4:
-                _cell(ws, ri, ci, val, fh, fnh)
-            elif ci == 7:
-                _cell(ws, ri, ci, val, fa, fna)
-            elif ci == 8:
-                if result_str == "Empate":
-                    _cell(ws, ri, ci, val, FILL_DRAW, FONT_DRAW)
-                elif result_str not in ("—", ""):
-                    _cell(ws, ri, ci, val, FILL_WIN, FONT_WIN)
-                else:
-                    _cell(ws, ri, ci, val, fill, FONT_MUTED)
-            else:
-                _cell(ws, ri, ci, val, fill, FONT_MUTED if ci in (1, 2) else FONT_NORMAL)
-        ws.row_dimensions[ri].height = 20
+            as_ if as_ is not None else "", m.away_nickname or "", res
+        ])
 
     return _to_bytes(wb)

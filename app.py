@@ -135,7 +135,13 @@ def _xlsx_response(xlsx: bytes, fname: str):
 @app.route("/download/excel/reports")
 def download_excel_reports():
     try:
-        xlsx, fname = reporter.generate_weekly_report()
+        # Limita a 3000 partidas para evitar timeout no Render free tier
+        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).limit(3000).all()
+        if not matches:
+            return "Nenhuma partida coletada.", 404
+        from excel_exporter import build_excel_reports
+        xlsx  = build_excel_reports(matches)
+        fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
         return _xlsx_response(xlsx, fname)
     except Exception as e:
         logger.error(f"Erro download reports: {e}")
@@ -178,14 +184,16 @@ def download_excel_h2h():
 @app.route("/download/excel/all-h2h")
 def download_excel_all_h2h():
     """Download de TODOS os confrontos sem precisar selecionar player."""
-    matches = Match.query.filter(Match.home_score.isnot(None)).order_by(Match.kickoff.desc()).all()
-    if not matches:
-        return "Nenhuma partida coletada.", 404
-    xlsx  = build_excel_all_h2h(matches)
-    fname = f"gtscout_todos_confrontos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-    return send_file(io.BytesIO(xlsx),
-                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     as_attachment=True, download_name=fname)
+    try:
+        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).limit(3000).all()
+        if not matches:
+            return "Nenhuma partida coletada.", 404
+        xlsx  = build_excel_all_h2h(matches)
+        fname = f"gtscout_todos_confrontos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+        return _xlsx_response(xlsx, fname)
+    except Exception as e:
+        logger.error(f"Erro download all-h2h: {e}")
+        return f"Erro ao gerar planilha: {e}", 500
 
 
 @app.route("/download/excel")

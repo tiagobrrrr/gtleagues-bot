@@ -3,7 +3,7 @@ services:
     name: gtleagues-bot
     runtime: python
     buildCommand: ./build.sh
-    startCommand: gunicorn app:app --timeout 120 --workers 1 --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --timeout 300 --workers 1 --worker-class sync --bind 0.0.0.0:$PORT --keep-alive 5
     envVars:
       - key: GT_SEASON_IDS
         value: "19415,19414,19413,19412,19411,19410,19371,19370,19369,19368,19367,19211"
