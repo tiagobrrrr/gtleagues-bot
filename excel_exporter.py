@@ -81,39 +81,109 @@ def _cell(ws, row, col, value, fill, font, align=None):
 # 1. Relatório de partidas
 # ──────────────────────────────────────────────────────────────
 def build_excel_reports(matches) -> bytes:
-    """Planilha com partidas coletadas — versão otimizada (write_only)."""
-    from openpyxl import Workbook as WB
-    wb = WB(write_only=True)
-    ws = wb.create_sheet("Partidas Coletadas")
+    """
+    Planilha de partidas — formato exato da imagem de exemplo.
+    Colunas: # | Data | Semana | Temporada | Player Casa | Time Casa |
+             Gols Casa | Gols Visitante | Time Visitante | Player Visitante | Resultado | Canal
+    Cores: Verde=vencedor, Vermelho=perdedor, Amarelo=empate
+    SEM LIMITE — todas as partidas coletadas.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Partidas"
+    ws.sheet_view.showGridLines = False
+
+    # Paleta de cores
+    F_BG1   = PatternFill("solid", fgColor="0D1117")   # fundo linha par
+    F_BG2   = PatternFill("solid", fgColor="161B22")   # fundo linha ímpar
+    F_HDR   = PatternFill("solid", fgColor="0D1117")   # cabeçalho
+    F_WIN   = PatternFill("solid", fgColor="1A7A4A")   # verde vencedor
+    F_LOSE  = PatternFill("solid", fgColor="8B1A1A")   # vermelho perdedor
+    F_DRAW  = PatternFill("solid", fgColor="7A6A00")   # amarelo empate
+
+    FT_HDR  = Font(bold=True, color="00E5A0", name="Calibri", size=11)
+    FT_WIN  = Font(bold=True, color="00FF88", name="Calibri", size=11)
+    FT_LOSE = Font(bold=True, color="FF6B6B", name="Calibri", size=11)
+    FT_DRAW = Font(bold=True, color="FFD700", name="Calibri", size=11)
+    FT_NORM = Font(color="C9D1D9", name="Calibri", size=10)
+    FT_MUT  = Font(color="8B949E", name="Calibri", size=10)
+
+    AC = Alignment(horizontal="center", vertical="center")
+    AL = Alignment(horizontal="left",   vertical="center")
+    BD = _border()
 
     # Cabeçalho
-    headers = ["#", "Data", "Semana", "Temporada",
-               "Player Casa", "Gols Casa", "Gols Visit.", "Player Visitante", "Resultado"]
-    ws.append(headers)
+    cols = [
+        ("#",               5),  ("Data",             18), ("Semana",    7),
+        ("Temporada",      30),  ("Player Casa",      16), ("Time Casa", 18),
+        ("Gols Casa",      10),  ("Gols Visitante",   12), ("Time Visitante", 18),
+        ("Player Visitante",16), ("Resultado",        22), ("Canal",      6),
+    ]
+    for ci, (h, w) in enumerate(cols, 1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.fill = F_HDR; c.font = FT_HDR; c.alignment = AC; c.border = BD
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.row_dimensions[1].height = 24
+    ws.freeze_panes = "A2"
 
-    for i, m in enumerate(matches, 1):
+    # Dados
+    for ri, m in enumerate(matches, 2):
         hs, as_ = m.home_score, m.away_score
+        bg = F_BG1 if ri % 2 == 0 else F_BG2
+
+        # Cores por resultado
         if hs is None or as_ is None:
+            fh, fth = bg, FT_MUT
+            fa, fta = bg, FT_MUT
+            fr, ftr = bg, FT_MUT
             res = "—"
         elif hs > as_:
+            fh, fth = F_WIN,  FT_WIN
+            fa, fta = F_LOSE, FT_LOSE
+            fr, ftr = F_WIN,  FT_WIN
             res = f"{m.home_nickname} venceu"
         elif hs < as_:
+            fh, fth = F_LOSE, FT_LOSE
+            fa, fta = F_WIN,  FT_WIN
+            fr, ftr = F_WIN,  FT_WIN
             res = f"{m.away_nickname} venceu"
         else:
+            fh, fth = F_DRAW, FT_DRAW
+            fa, fta = F_DRAW, FT_DRAW
+            fr, ftr = F_DRAW, FT_DRAW
             res = "Empate"
+
+        # Cor dos gols
+        if hs is not None and as_ is not None:
+            ftgs = FT_WIN if hs > as_ else (FT_LOSE if hs < as_ else FT_DRAW)
+            ftga = FT_WIN if as_ > hs else (FT_LOSE if as_ < hs else FT_DRAW)
+        else:
+            ftgs = ftga = FT_MUT
+
         kickoff = (m.kickoff or "")[:16].replace("T", " ")
-        ws.append([
-            i, kickoff, m.week or "", m.season_name or "",
-            m.home_nickname or "", hs if hs is not None else "",
-            as_ if as_ is not None else "", m.away_nickname or "", res
-        ])
+
+        row_vals = [
+            (ri-1,                  bg,  FT_MUT, AC),
+            (kickoff,               bg,  FT_MUT, AL),
+            (m.week or "",          bg,  FT_MUT, AC),
+            (m.season_name or "",   bg,  FT_NORM, AL),
+            (m.home_nickname or "", fh,  fth, AC),
+            (m.home_team or "",     bg,  FT_NORM, AL),
+            (hs if hs is not None else "", bg, ftgs, AC),
+            (as_ if as_ is not None else "", bg, ftga, AC),
+            (m.away_team or "",     bg,  FT_NORM, AL),
+            (m.away_nickname or "", fa,  fta, AC),
+            (res,                   fr,  ftr, AC),
+            (m.channel or "",       bg,  FT_MUT, AC),
+        ]
+
+        for ci, (val, fill, font, aln) in enumerate(row_vals, 1):
+            c = ws.cell(row=ri, column=ci, value=val)
+            c.fill = fill; c.font = font; c.alignment = aln; c.border = BD
+        ws.row_dimensions[ri].height = 20
 
     return _to_bytes(wb)
 
-
-# ──────────────────────────────────────────────────────────────
-# 2. Estatísticas individuais
-# ──────────────────────────────────────────────────────────────
 def build_excel_stats(stats_list) -> bytes:
     """Planilha com estatísticas individuais dos players."""
     wb = Workbook()

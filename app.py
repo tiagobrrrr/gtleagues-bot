@@ -140,8 +140,8 @@ def _xlsx_response(xlsx: bytes, fname: str):
 @app.route("/download/excel/reports")
 def download_excel_reports():
     try:
-        # Limita a 3000 partidas para evitar timeout no Render free tier
-        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).limit(3000).all()
+        matches = Match.query.filter(Match.home_score.isnot(None)) \
+                             .order_by(Match.kickoff.desc()).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
         xlsx  = build_excel_reports(matches)
@@ -189,7 +189,8 @@ def download_excel_h2h():
 def download_excel_all_h2h():
     """Download de TODOS os confrontos sem precisar selecionar player."""
     try:
-        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).limit(3000).all()
+        matches = Match.query.filter(Match.home_score.isnot(None)) \
+                             .order_by(Match.kickoff.desc()).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
         xlsx  = build_excel_all_h2h(matches)
