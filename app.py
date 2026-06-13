@@ -2,7 +2,7 @@ import os, io, json, logging, socket
 from datetime import datetime
 
 import pytz
-from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for
+from flask import Flask, render_template, jsonify, request, send_file, redirect, url_for, make_response
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -140,13 +140,18 @@ def _xlsx_response(xlsx: bytes, fname: str):
 @app.route("/download/excel/reports")
 def download_excel_reports():
     try:
-        matches = Match.query.filter(Match.home_score.isnot(None)) \
-                             .order_by(Match.kickoff.desc()).all()
+        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
+        logger.info(f"Gerando Excel com {len(matches)} partidas...")
         xlsx  = build_excel_reports(matches)
         fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-        return _xlsx_response(xlsx, fname)
+        logger.info(f"Excel gerado: {len(xlsx)} bytes")
+        resp = make_response(xlsx)
+        resp.headers["Content-Type"]        = XLSX_MIME
+        resp.headers["Content-Disposition"] = f"attachment; filename={fname}"
+        resp.headers["Content-Length"]      = str(len(xlsx))
+        return resp
     except Exception as e:
         logger.error(f"Erro download reports: {e}")
         return f"Erro ao gerar planilha: {e}", 500
@@ -189,13 +194,17 @@ def download_excel_h2h():
 def download_excel_all_h2h():
     """Download de TODOS os confrontos sem precisar selecionar player."""
     try:
-        matches = Match.query.filter(Match.home_score.isnot(None)) \
-                             .order_by(Match.kickoff.desc()).all()
+        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
+        logger.info(f"Gerando Excel H2H com {len(matches)} partidas...")
         xlsx  = build_excel_all_h2h(matches)
         fname = f"gtscout_todos_confrontos_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-        return _xlsx_response(xlsx, fname)
+        resp = make_response(xlsx)
+        resp.headers["Content-Type"]        = XLSX_MIME
+        resp.headers["Content-Disposition"] = f"attachment; filename={fname}"
+        resp.headers["Content-Length"]      = str(len(xlsx))
+        return resp
     except Exception as e:
         logger.error(f"Erro download all-h2h: {e}")
         return f"Erro ao gerar planilha: {e}", 500
