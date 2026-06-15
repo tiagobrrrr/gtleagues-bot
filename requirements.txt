@@ -8,3 +8,4 @@ openpyxl==3.1.2
 gunicorn==21.2.0
 pytz==2026.1.post1
 requests==2.32.3
+sqlalchemy-cockroachdb==2.0.2
