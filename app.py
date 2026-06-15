@@ -30,7 +30,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
 # ── Banco: CockroachDB (10GB gratuito) ───────────────────────
-DB_URL = "postgresql+psycopg2://Tiagonrr:OtIBR7YVkLCS2e7hFCXhpQ@woolly-flyer-17105.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+DB_URL = "postgresql+psycopg2://Tiagonrr:OtIBR7YVkLCS2e7hFCXhpQ@woolly-flyer-17105.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
 logger.info("Banco: CockroachDB")
 logger.info(f"Banco configurado.")
 
