@@ -42,7 +42,7 @@ db.init_app(app)
 try:
     with app.app_context():
         db.create_all()
-        logger.info("✅ Tabelas criadas/verificadas no Supabase.")
+        logger.info("✅ Tabelas criadas/verificadas no CockroachDB.")
 except Exception as e:
     logger.error(f"❌ Erro ao conectar: {e}")
     raise
