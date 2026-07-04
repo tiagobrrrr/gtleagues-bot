@@ -29,9 +29,15 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco: CockroachDB (10GB gratuito) ───────────────────────
-DB_URL = "cockroachdb+psycopg2://Tiagonrr:OtIBR7YVkLCS2e7hFCXhpQ@woolly-flyer-17105.jxf.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
-logger.info("Banco: CockroachDB")
+# ── Banco: lê da variável DATABASE_URL do Render ─────────────
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
+# Suporte a postgres://, postgresql://, cockroachdb://
+DB_URL = DB_URL.replace("postgres://", "postgresql://")
+if "cockroachdb://" in DB_URL and "+psycopg2" not in DB_URL:
+    DB_URL = DB_URL.replace("cockroachdb://", "cockroachdb+psycopg2://")
+elif "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg2://")
+logger.info(f"Banco configurado: {DB_URL.split('@')[-1].split('/')[0] if '@' in DB_URL else 'sqlite'}")
 logger.info(f"Banco configurado.")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
