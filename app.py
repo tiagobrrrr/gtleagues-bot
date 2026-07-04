@@ -32,7 +32,7 @@ app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 # ── Banco: CockroachDB (10GB gratuito) ───────────────────────
 DB_URL = os.getenv(
     "DATABASE_URL",
-    "cockroachdb+psycopg2://tiagobr:HZm6H0YeIt2AUwk0LA4QXQ@fifa-gtleague-16958.jxf.gcp-europe-west1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+    "cockroachdb+psycopg2://tiagobr:HZm6H0YeIt2AUwk0LA4QXQ@fifa-gtleague-16958.jxf.gcp-europe-west1.cockroachlabs.cloud:26257/defaultdb?sslmode=require&sslrootcert=system"
 )
 # Normaliza prefixo para o dialeto correto
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
