@@ -53,6 +53,8 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 db.init_app(app)
 try:
     with app.app_context():
+        # Drop e recria tabelas se schema desatualizado (novo banco)
+        db.drop_all()
         db.create_all()
         logger.info("✅ Tabelas criadas/verificadas no CockroachDB.")
 except Exception as e:
