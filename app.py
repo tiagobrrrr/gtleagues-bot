@@ -29,17 +29,11 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco: CockroachDB (10GB gratuito) ───────────────────────
-DB_URL = os.getenv(
-    "DATABASE_URL",
-    "cockroachdb+psycopg2://tiagobrrrr:qGInMLRHgOy647tPHIBQ8g@right-liger-17510.jxf.gcp-us-east1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
-)
-# Normaliza prefixo para o dialeto correto
+# ── Banco: lê DATABASE_URL do Render ─────────────────────────
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
 DB_URL = DB_URL.replace("postgres://", "postgresql://")
-if "cockroachdb://" in DB_URL and "+psycopg2" not in DB_URL:
-    DB_URL = DB_URL.replace("cockroachdb://", "cockroachdb+psycopg2://")
-elif "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
-    DB_URL = DB_URL.replace("postgresql://", "cockroachdb+psycopg2://")
+if "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg2://")
 logger.info(f"Banco: {DB_URL.split('@')[-1].split('/')[0] if '@' in DB_URL else 'sqlite'}")
 logger.info(f"Banco configurado.")
 
