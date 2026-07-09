@@ -29,18 +29,17 @@ def now_br():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "gtscout-dev-key")
 
-# ── Banco: lê DATABASE_URL do Render ─────────────────────────
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///gtscout.db")
-DB_URL = DB_URL.replace("postgres://", "postgresql://")
-# CockroachDB requer dialeto próprio (nao postgresql)
-if "cockroachlabs" in DB_URL:
-    if DB_URL.startswith("postgresql://"):
-        DB_URL = "cockroachdb+psycopg2://" + DB_URL[len("postgresql://"):]
-    elif DB_URL.startswith("postgresql+psycopg2://"):
-        DB_URL = "cockroachdb+psycopg2://" + DB_URL[len("postgresql+psycopg2://"):]
-elif "postgresql://" in DB_URL and "+psycopg" not in DB_URL:
-    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg2://")
-logger.info(f"Banco: {DB_URL.split('@')[-1].split('/')[0] if '@' in DB_URL else 'sqlite'}")
+# ── Banco: CockroachDB fifa-gtleague-16958 ───────────────────
+_RAW = os.getenv(
+    "DATABASE_URL",
+    "postgresql://tiagobr:HZm6H0YeIt2AUwk0LA4QXQ@fifa-gtleague-16958.jxf.gcp-europe-west1.cockroachlabs.cloud:26257/defaultdb"
+)
+# Converte para dialeto cockroachdb+psycopg2 (obrigatorio para CockroachDB)
+_host = _RAW.split("@")[-1].split("/")[0] if "@" in _RAW else ""
+_creds = _RAW.split("@")[0].split("://")[-1] if "@" in _RAW else ""
+_db = _RAW.split("/")[-1].split("?")[0] if "/" in _RAW else "defaultdb"
+DB_URL = f"cockroachdb+psycopg2://{_creds}@{_host}/{_db}?sslmode=require"
+logger.info(f"Banco: {_host}")
 logger.info(f"Banco configurado.")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DB_URL
