@@ -149,7 +149,9 @@ def _xlsx_response(xlsx: bytes, fname: str):
 @app.route("/download/excel/reports")
 def download_excel_reports():
     try:
-        matches = Match.query.filter(Match.home_score.isnot(None))                              .order_by(Match.kickoff.desc()).all()
+        matches = Match.query.filter(
+            Match.home_score.isnot(None)
+        ).order_by(Match.kickoff.desc()).all()
         if not matches:
             return "Nenhuma partida coletada.", 404
         logger.info(f"Gerando Excel com {len(matches)} partidas...")
