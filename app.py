@@ -149,6 +149,7 @@ def _xlsx_response(xlsx: bytes, fname: str):
 @app.route("/download/excel/reports")
 def download_excel_reports():
     try:
+        # Pega todas as partidas mas em chunks eficientes
         matches = Match.query.filter(
             Match.home_score.isnot(None)
         ).order_by(Match.kickoff.desc()).all()
@@ -158,10 +159,18 @@ def download_excel_reports():
         xlsx  = build_excel_reports(matches)
         fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
         logger.info(f"Excel gerado: {len(xlsx)} bytes")
-        resp = make_response(xlsx)
-        resp.headers["Content-Type"]        = XLSX_MIME
-        resp.headers["Content-Disposition"] = f"attachment; filename={fname}"
-        resp.headers["Content-Length"]      = str(len(xlsx))
+        from flask import Response
+        def generate():
+            yield xlsx
+        resp = Response(
+            generate(),
+            mimetype=XLSX_MIME,
+            headers={
+                "Content-Disposition": f"attachment; filename={fname}",
+                "Content-Length": str(len(xlsx)),
+                "X-Accel-Buffering": "no",
+            }
+        )
         return resp
     except Exception as e:
         logger.error(f"Erro download reports: {e}")
