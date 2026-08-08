@@ -4,7 +4,17 @@
 {% block content %}
 <div class="flex items-center justify-between mb-2">
   <h1 class="page-title">📋 Relatórios</h1>
-  <a href="/download/excel/reports" class="btn btn-green">⬇ Baixar Planilha de Partidas</a>
+  <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center;">
+    <span style="color:var(--muted); font-size:.85rem;">⬇ Baixar Partidas (5000 por arquivo):</span>
+    {% set total_pages = ((summary.total // 5000) + (1 if summary.total % 5000 > 0 else 0)) %}
+    {% for p in range(1, total_pages + 1) %}
+      {% set de = (p-1)*5000 + 1 %}
+      {% set ate = [p*5000, summary.total] | min %}
+      <a href="/download/excel/reports?page={{ p }}" class="btn btn-green" style="font-size:.85rem; padding:.3rem .8rem;">
+        Pág {{ p }} ({{ de }}–{{ ate }})
+      </a>
+    {% endfor %}
+  </div>
 </div>
 
 <!-- Resumo geral -->

@@ -148,29 +148,41 @@ def _xlsx_response(xlsx: bytes, fname: str):
 
 @app.route("/download/excel/reports")
 def download_excel_reports():
+    """
+    Download paginado de partidas — 5000 por arquivo.
+    ?page=1 → partidas 1-5000 (mais recentes)
+    ?page=2 → partidas 5001-10000
+    ?page=3 → partidas 10001-15000
+    etc.
+    """
     try:
-        # Pega todas as partidas mas em chunks eficientes
+        page   = max(1, int(request.args.get("page", 1)))
+        limit  = 5000
+        offset = (page - 1) * limit
+
+        total = Match.query.filter(Match.home_score.isnot(None)).count()
+        if total == 0:
+            return "Nenhuma partida coletada.", 404
+
+        import math
+        total_pages = math.ceil(total / limit)
+        if page > total_pages:
+            return f"Página {page} não existe. Total: {total_pages} páginas.", 404
+
         matches = Match.query.filter(
             Match.home_score.isnot(None)
-        ).order_by(Match.kickoff.desc()).all()
-        if not matches:
-            return "Nenhuma partida coletada.", 404
-        logger.info(f"Gerando Excel com {len(matches)} partidas...")
+        ).order_by(Match.kickoff.desc()).offset(offset).limit(limit).all()
+
+        de   = offset + 1
+        ate  = offset + len(matches)
+        logger.info(f"Gerando Excel página {page}/{total_pages}: partidas {de}-{ate} de {total}")
         xlsx  = build_excel_reports(matches)
-        fname = f"gtscout_partidas_{now_br().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+        fname = f"gtscout_partidas_pag{page}de{total_pages}_{now_br().strftime('%Y-%m-%d')}.xlsx"
         logger.info(f"Excel gerado: {len(xlsx)} bytes")
-        from flask import Response
-        def generate():
-            yield xlsx
-        resp = Response(
-            generate(),
-            mimetype=XLSX_MIME,
-            headers={
-                "Content-Disposition": f"attachment; filename={fname}",
-                "Content-Length": str(len(xlsx)),
-                "X-Accel-Buffering": "no",
-            }
-        )
+        resp = make_response(xlsx)
+        resp.headers["Content-Type"]        = XLSX_MIME
+        resp.headers["Content-Disposition"] = f"attachment; filename={fname}"
+        resp.headers["Content-Length"]      = str(len(xlsx))
         return resp
     except Exception as e:
         logger.error(f"Erro download reports: {e}")
